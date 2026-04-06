@@ -27,6 +27,15 @@ except ImportError:
     BaostockProvider = None
     BAOSTOCK_AVAILABLE = False
 
+# 导入 Resilient Provider（带自动降级）
+try:
+    from .resilient_provider import ResilientChinaStockProvider, get_resilient_provider
+    RESILIENT_PROVIDER_AVAILABLE = True
+except ImportError:
+    ResilientChinaStockProvider = None
+    get_resilient_provider = None
+    RESILIENT_PROVIDER_AVAILABLE = False
+
 # 导入基本面快照工具
 try:
     from .fundamentals_snapshot import get_fundamentals_snapshot
@@ -42,6 +51,9 @@ __all__ = [
     'TUSHARE_AVAILABLE',
     'BaostockProvider',
     'BAOSTOCK_AVAILABLE',
+    'ResilientChinaStockProvider',
+    'get_resilient_provider',
+    'RESILIENT_PROVIDER_AVAILABLE',
     'get_fundamentals_snapshot',
     'FUNDAMENTALS_SNAPSHOT_AVAILABLE',
 ]

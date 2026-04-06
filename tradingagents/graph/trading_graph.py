@@ -204,6 +204,18 @@ class TradingAgentsGraph:
             debug: Whether to run in debug mode
             config: Configuration dictionary. If None, uses default config
         """
+        # 🔥 [修复] 处理参数传递错误
+        # 如果第一个参数看起来像 config（是 dict 且包含 'llm_provider' 键），则重新分配参数
+        if isinstance(selected_analysts, dict) and 'llm_provider' in selected_analysts:
+            logger.warning(f"⚠️ [参数修复] 检测到第一个参数是 config，自动重新分配参数")
+            config = selected_analysts
+            selected_analysts = ["market", "fundamentals"]  # 使用默认分析师
+            
+        # 🔥 [修复] 处理 selected_analysts 为 None 的情况
+        if selected_analysts is None:
+            logger.warning(f"⚠️ [参数修复] selected_analysts 为 None，使用默认分析师")
+            selected_analysts = ["market", "fundamentals"]
+            
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
 
@@ -760,10 +772,14 @@ class TradingAgentsGraph:
             else:
                 # 原有的invoke模式（也需要计时）
                 logger.info("⏱️ 使用 invoke 模式执行分析（无进度回调）")
-                # 使用stream模式以便计时，但不发送进度更新
+                # 🔥 [修复] 使用 stream_mode="updates" 以正确获取节点名称
+                # 原来的 "values" 模式返回完整状态，不适合节点计时
+                args_with_updates = args.copy()
+                args_with_updates["stream_mode"] = "updates"
+                
                 trace = []
                 final_state = None
-                for chunk in self.graph.stream(init_agent_state, **args):
+                for chunk in self.graph.stream(init_agent_state, **args_with_updates):
                     # 记录节点计时
                     for node_name in chunk.keys():
                         if not node_name.startswith('__'):
@@ -778,12 +794,19 @@ class TradingAgentsGraph:
                             current_node_start = time.time()
                             break
 
-                    # 累积状态更新
+                    # 累积状态更新（updates 模式下 chunk = {node_name: update_dict})
                     if final_state is None:
                         final_state = init_agent_state.copy()
                     for node_name, node_update in chunk.items():
                         if not node_name.startswith('__'):
-                            final_state.update(node_update)
+                            # 🔥 [修复] 确保 node_update 是字典类型
+                            if isinstance(node_update, dict):
+                                final_state.update(node_update)
+                            else:
+                                logger.warning(f"⚠️ [Stream] node_update 不是字典类型: {type(node_update)}, node: {node_name}")
+                                # 如果不是字典，直接使用 chunk 作为状态更新（values 模式的兼容处理）
+                                if isinstance(chunk, dict):
+                                    final_state = chunk
 
         # 记录最后一个节点的时间
         if current_node_name and current_node_start:

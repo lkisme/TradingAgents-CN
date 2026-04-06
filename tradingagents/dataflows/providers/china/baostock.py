@@ -15,7 +15,17 @@ logger = logging.getLogger(__name__)
 
 
 class BaoStockProvider(BaseStockDataProvider):
-    """BaoStock统一数据提供器"""
+    """BaoStock统一数据提供器
+    
+    使用持久连接模式：
+    - 初始化时自动登录
+    - 所有查询共用一个连接
+    - 不需要每次查询都login/logout
+    """
+    
+    # 类级别的连接状态，确保所有实例共享
+    _class_logged_in = False
+    _class_bs = None
     
     def __init__(self):
         """初始化BaoStock提供器"""
@@ -28,9 +38,24 @@ class BaoStockProvider(BaseStockDataProvider):
         """初始化BaoStock连接"""
         try:
             import baostock as bs
+            BaoStockProvider._class_bs = bs
             self.bs = bs
             logger.info("🔧 BaoStock模块加载成功")
-            self.connected = True
+            
+            # 🔥 使用持久连接：初始化时登录
+            if not BaoStockProvider._class_logged_in:
+                lg = bs.login()
+                if lg.error_code == '0':
+                    BaoStockProvider._class_logged_in = True
+                    self.connected = True
+                    logger.info("✅ BaoStock持久连接登录成功")
+                else:
+                    logger.warning(f"⚠️ BaoStock登录失败: {lg.error_msg}")
+                    self.connected = False
+            else:
+                self.connected = True
+                logger.info("✅ BaoStock连接已存在（持久模式）")
+                
         except ImportError as e:
             logger.error(f"❌ BaoStock模块未安装: {e}")
             self.connected = False
@@ -567,9 +592,15 @@ class BaoStockProvider(BaseStockDataProvider):
 
             def fetch_historical_data():
                 bs_code = self._to_baostock_code(code)
-                lg = self.bs.login()
-                if lg.error_code != '0':
-                    raise Exception(f"登录失败: {lg.error_msg}")
+                
+                # 🔥 使用持久连接，不再每次login/logout
+                # 如果连接断开，尝试重新登录
+                if not BaoStockProvider._class_logged_in:
+                    lg = self.bs.login()
+                    if lg.error_code != '0':
+                        raise Exception(f"登录失败: {lg.error_msg}")
+                    BaoStockProvider._class_logged_in = True
+                    logger.info("✅ BaoStock重新登录成功")
 
                 try:
                     # 根据频率选择不同的字段（周线和月线支持的字段较少）
@@ -596,8 +627,12 @@ class BaoStockProvider(BaseStockDataProvider):
                         data_list.append(rs.get_row_data())
 
                     return data_list, rs.fields
-                finally:
-                    self.bs.logout()
+                except Exception as e:
+                    # 如果查询失败，可能是连接断开，标记需要重新登录
+                    if "用户未登录" in str(e) or "login" in str(e).lower():
+                        BaoStockProvider._class_logged_in = False
+                        logger.warning(f"⚠️ BaoStock连接断开，下次将重新登录")
+                    raise
 
             data_list, fields = await asyncio.to_thread(fetch_historical_data)
 

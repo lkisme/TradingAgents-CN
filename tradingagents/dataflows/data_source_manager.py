@@ -598,6 +598,89 @@ class DataSourceManager:
         except ImportError as e:
             logger.error(f"❌ BaoStock适配器导入失败: {e}")
             return None
+    
+    def _get_resilient_provider(self):
+        """获取Resilient Provider（带自动降级）"""
+        try:
+            from .providers.china.resilient_provider import get_resilient_provider
+            return get_resilient_provider()
+        except ImportError as e:
+            logger.error(f"❌ Resilient Provider导入失败: {e}")
+            return None
+    
+    def get_stock_data_resilient(self, symbol: str, start_date: str = None, end_date: str = None, period: str = "daily") -> str:
+        """
+        使用Resilient Provider获取股票数据（带自动降级）
+        
+        这个方法使用 ResilientChinaStockProvider，当 AKShare 失败时自动切换到 BaoStock。
+        适用于需要高可靠性的数据获取场景。
+        
+        Args:
+            symbol: 股票代码
+            start_date: 开始日期
+            end_date: 结束日期
+            period: 数据周期
+        
+        Returns:
+            str: 格式化的股票数据报告
+        """
+        logger.info(f"📊 [Resilient模式] 开始获取股票数据: {symbol}")
+        
+        try:
+            import asyncio
+            import concurrent.futures
+            
+            # 获取 Resilient Provider
+            provider = self._get_resilient_provider()
+            if not provider:
+                logger.error(f"❌ Resilient Provider 不可用，回退到默认模式")
+                return self.get_stock_data(symbol, start_date, end_date, period)
+            
+            # 🔥 使用线程池执行异步方法，避免 event loop 冲突
+            def run_async_in_thread():
+                """在独立线程中运行异步代码"""
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(
+                        provider.get_historical_data(symbol, start_date, end_date, period)
+                    )
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_async_in_thread)
+                df = future.result(timeout=30)  # 30秒超时
+            
+            if df is not None and not df.empty:
+                # 获取当前使用的数据源
+                current_source = provider.get_current_source()
+                logger.info(f"✅ [Resilient模式] 数据获取成功: {symbol}, 数据源={current_source}, {len(df)}条")
+                
+                # 从 DataFrame 或缓存获取股票名称
+                stock_name = f'股票{symbol}'
+                try:
+                    # 尝试从股票基本信息获取名称
+                    stock_info = self.get_stock_info(symbol)
+                    if stock_info and stock_info.get('name'):
+                        stock_name = stock_info['name']
+                except Exception:
+                    pass
+                
+                # 格式化返回结果（包含技术指标）
+                result = self._format_stock_data_response(df, symbol, stock_name, start_date, end_date)
+                
+                # 添加数据源信息
+                result += f"\n💡 数据来源: {current_source} (通过 Resilient Provider)"
+                
+                return result
+            else:
+                logger.warning(f"⚠️ [Resilient模式] 所有数据源都失败: {symbol}")
+                return f"❌ 无法获取 {symbol} 的股票数据（所有数据源都失败）"
+                
+        except Exception as e:
+            logger.error(f"❌ [Resilient模式] 获取股票数据失败: {e}", exc_info=True)
+            return f"❌ 获取 {symbol} 股票数据失败: {e}"
 
     # TDX 适配器已移除
     # def _get_tdx_adapter(self):
@@ -2141,7 +2224,7 @@ def get_data_source_manager() -> DataSourceManager:
 def get_china_stock_data_unified(symbol: str, start_date: str, end_date: str) -> str:
     """
     统一的中国股票数据获取接口
-    自动使用配置的数据源，支持备用数据源
+    自动使用配置的数据源，支持备用数据源（AKShare失败时自动切换BaoStock）
 
     Args:
         symbol: 股票代码
@@ -2160,8 +2243,11 @@ def get_china_stock_data_unified(symbol: str, start_date: str, end_date: str) ->
     logger.info(f"🔍 [股票代码追踪] 股票代码字符: {list(str(symbol))}")
 
     manager = get_data_source_manager()
-    logger.info(f"🔍 [股票代码追踪] 调用 manager.get_stock_data，传入参数: symbol='{symbol}', start_date='{start_date}', end_date='{end_date}'")
-    result = manager.get_stock_data(symbol, start_date, end_date)
+    
+    # 🔥 优先使用 Resilient Provider（带自动降级）
+    # AKShare失败时自动切换BaoStock
+    logger.info(f"🔍 [股票代码追踪] 调用 manager.get_stock_data_resilient（带自动降级），传入参数: symbol='{symbol}', start_date='{start_date}', end_date='{end_date}'")
+    result = manager.get_stock_data_resilient(symbol, start_date, end_date)
     # 分析返回结果的详细信息
     if result:
         lines = result.split('\n')
