@@ -602,11 +602,17 @@ class DataSourceManager:
     def _get_resilient_provider(self):
         """获取Resilient Provider（带自动降级）"""
         try:
-            from .providers.china.resilient_provider import get_resilient_provider
-            return get_resilient_provider()
+            # 🔥 优先使用增强版 Provider（MongoDB 缓存优先）
+            from .providers.china.resilient_provider_enhanced import get_enhanced_resilient_provider
+            return get_enhanced_resilient_provider()
         except ImportError as e:
-            logger.error(f"❌ Resilient Provider导入失败: {e}")
-            return None
+            logger.warning(f"⚠️ Enhanced Resilient Provider导入失败: {e}，尝试使用原版")
+            try:
+                from .providers.china.resilient_provider import get_resilient_provider
+                return get_resilient_provider()
+            except ImportError as e2:
+                logger.error(f"❌ Resilient Provider导入失败: {e2}")
+                return None
     
     def get_stock_data_resilient(self, symbol: str, start_date: str = None, end_date: str = None, period: str = "daily") -> str:
         """
