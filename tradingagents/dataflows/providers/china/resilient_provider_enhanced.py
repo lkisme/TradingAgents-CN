@@ -214,6 +214,7 @@ _enhanced_resilient_provider = None
 
 def get_enhanced_resilient_provider() -> ResilientChinaStockProviderEnhanced:
     """获取增强版 Resilient Provider"""
+    global _enhanced_resilient_provider
     if _enhanced_resilient_provider is None:
         _enhanced_resilient_provider = ResilientChinaStockProviderEnhanced()
     return _enhanced_resilient_provider
