@@ -569,6 +569,20 @@ async def lifespan(app: FastAPI):
         else:
             logger.info(f"📰 新闻数据同步已配置（仅自选股）: {settings.NEWS_SYNC_CRON}")
 
+        # ==================== 日线数据缓存同步（MongoDB 缓存优先） ====================
+        logger.info("🔄 配置日线数据缓存同步任务...")
+
+        from app.services.daily_quotes_scheduler import job_sync_daily_quotes
+
+        # 每日 16:30 同步日线数据（收盘后）
+        scheduler.add_job(
+            job_sync_daily_quotes,
+            CronTrigger(hour=16, minute=30, timezone=settings.TIMEZONE),
+            id="daily_quotes_cache_sync",
+            name="日线数据缓存同步（MongoDB）"
+        )
+        logger.info(f"📅 日线数据缓存同步已配置: 16:30 ({settings.TIMEZONE})")
+
         scheduler.start()
 
         # 设置调度器实例到服务中，以便API可以管理任务
