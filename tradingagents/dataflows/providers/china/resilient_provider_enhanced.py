@@ -107,7 +107,7 @@ class ResilientChinaStockProviderEnhanced:
             akshare = self._get_akshare_provider()
             data = await akshare.get_historical_data(symbol, fetch_start, fetch_end)
             
-            if data and not data.empty:
+            if data is not None and not data.empty:
                 logger.info(f"✅ [AKShare] 获取成功: {symbol}, {len(data)} 条")
                 # 写入缓存
                 adapter.save_historical_data_bulk(symbol, data, 'akshare')
@@ -129,7 +129,7 @@ class ResilientChinaStockProviderEnhanced:
             baostock = self._get_baostock_provider()
             data = await baostock.get_historical_data(symbol, fetch_start, fetch_end)
             
-            if data and not data.empty:
+            if data is not None and not data.empty:
                 logger.info(f"✅ [BaoStock] 获取成功: {symbol}, {len(data)} 条")
                 # 写入缓存
                 adapter.save_historical_data_bulk(symbol, data, 'baostock')

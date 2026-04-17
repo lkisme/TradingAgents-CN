@@ -69,11 +69,18 @@ class TradingDayUtils:
             logger.debug(f"盘中，最近已收盘交易日: {result}")
             return result
         
-        # 收盘后（交易时间外）
-        if is_trading_day and not cls._is_trading_time(now):
+        # 盘后（15:00之后）
+        if is_trading_day and cls._is_after_market_close(now):
             # 收盘后，今天已收盘
             logger.debug(f"收盘后，最近已收盘交易日: {today}")
             return today
+        
+        # 盘前或盘中（开盘前或交易时间内）→ 今天未收盘
+        if is_trading_day and not cls._is_after_market_close(now):
+            # 今天未收盘，返回上一个交易日
+            result = calendar.get_previous_trading_day(Market.CN, today)
+            logger.debug(f"盘前/盘中，最近已收盘交易日: {result}")
+            return result
         
         # 非交易日（周末/节假日）
         if not is_trading_day:
@@ -117,6 +124,19 @@ class TradingDayUtils:
         return False
     
     @classmethod
+    def _is_after_market_close(cls, now: datetime) -> bool:
+        """
+        检查是否收盘后（15:00 之后）
+        
+        Args:
+            now: 当前时间
+        
+        Returns:
+            bool: 是否收盘后
+        """
+        return now.hour >= 15
+    
+    @classmethod
     def is_after_market_close(cls) -> bool:
         """
         检查是否收盘后（15:00 之后）
@@ -124,8 +144,7 @@ class TradingDayUtils:
         Returns:
             bool: 是否收盘后
         """
-        now = datetime.now()
-        return now.hour >= 15
+        return cls._is_after_market_close(datetime.now())
     
     @classmethod
     def get_yesterday_trading_day(cls) -> str:
