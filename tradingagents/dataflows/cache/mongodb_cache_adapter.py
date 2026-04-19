@@ -160,7 +160,7 @@ class MongoDBCacheAdapter:
     def get_historical_data(self, symbol: str, start_date: str = None, end_date: str = None,
                           period: str = "daily") -> Optional[pd.DataFrame]:
         """
-        获取历史数据，支持多周期，按数据源优先级查询
+        获取历史数据，支持多周期，合并所有数据源的数据
 
         Args:
             symbol: 股票代码
@@ -178,41 +178,42 @@ class MongoDBCacheAdapter:
             code6 = str(symbol).zfill(6)
             collection = self.db.stock_daily_quotes
 
-            # 获取数据源优先级
-            priority_order = self._get_data_source_priority(symbol)
+            # 🔥 构建查询条件（不限制 data_source，合并所有数据源）
+            query = {
+                "symbol": code6,
+                "period": period
+            }
 
-            # 按优先级查询
-            for data_source in priority_order:
-                # 构建查询条件
-                query = {
-                    "symbol": code6,
-                    "period": period,
-                    "data_source": data_source  # 指定数据源
-                }
-
-                if start_date:
-                    query["trade_date"] = {"$gte": start_date}
-                if end_date:
-                    if "trade_date" in query:
-                        query["trade_date"]["$lte"] = end_date
-                    else:
-                        query["trade_date"] = {"$lte": end_date}
-
-                # 查询数据
-                logger.debug(f"🔍 [MongoDB查询] 尝试数据源: {data_source}, symbol={code6}, period={period}")
-                cursor = collection.find(query, {"_id": 0}).sort("trade_date", 1)
-                data = list(cursor)
-
-                if data:
-                    df = pd.DataFrame(data)
-                    logger.info(f"✅ [数据来源: MongoDB-{data_source}] {symbol}, {len(df)}条记录 (period={period})")
-                    return df
+            if start_date:
+                query["trade_date"] = {"$gte": start_date}
+            if end_date:
+                if "trade_date" in query:
+                    query["trade_date"]["$lte"] = end_date
                 else:
-                    logger.debug(f"⚠️ [MongoDB-{data_source}] 未找到{period}数据: {symbol}")
+                    query["trade_date"] = {"$lte": end_date}
 
-            # 所有数据源都没有数据
-            logger.warning(f"⚠️ [数据来源: MongoDB] 所有数据源({', '.join(priority_order)})都没有{period}数据: {symbol}，降级到其他数据源")
-            return None
+            # 🔥 查询所有数据源的数据，按日期排序
+            logger.debug(f"🔍 [MongoDB查询] symbol={code6}, period={period}, start={start_date}, end={end_date}")
+            cursor = collection.find(query, {"_id": 0}).sort("trade_date", 1)
+            data = list(cursor)
+
+            if data:
+                # 🔥 合并数据：同一日期可能来自不同数据源，优先使用更新的数据
+                df = pd.DataFrame(data)
+                
+                # 去重：同一日期保留最新的记录（按 updated_at 排序）
+                if 'trade_date' in df.columns and 'updated_at' in df.columns:
+                    df = df.sort_values('updated_at', ascending=False)
+                    df = df.drop_duplicates(subset=['trade_date'], keep='first')
+                    df = df.sort_values('trade_date', ascending=True)
+                
+                # 记录数据来源统计
+                source_counts = df['data_source'].value_counts().to_dict()
+                logger.info(f"✅ [数据来源: MongoDB] {symbol}, {len(df)}条记录 (period={period}), 来源: {source_counts}")
+                return df
+            else:
+                logger.warning(f"⚠️ [数据来源: MongoDB] 没有{period}数据: {symbol}")
+                return None
 
         except Exception as e:
             logger.warning(f"⚠️ 获取历史数据失败: {e}")
