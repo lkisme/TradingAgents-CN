@@ -17,6 +17,7 @@ class DailyQuotesSyncService:
     def __init__(self):
         self._cache_adapter = None
         self._akshare_provider = None
+        self._baostock_provider = None
     
     def _get_cache_adapter(self):
         """获取缓存适配器"""
@@ -31,6 +32,13 @@ class DailyQuotesSyncService:
             from tradingagents.dataflows.providers.china.akshare import get_akshare_provider
             self._akshare_provider = get_akshare_provider()
         return self._akshare_provider
+    
+    def _get_baostock_provider(self):
+        """获取 BaoStock Provider（备用）"""
+        if self._baostock_provider is None:
+            from tradingagents.dataflows.providers.china.baostock import get_baostock_provider
+            self._baostock_provider = get_baostock_provider()
+        return self._baostock_provider
     
     async def sync_stock_pool(self, stock_pool: List[str]) -> Dict:
         """
@@ -55,6 +63,7 @@ class DailyQuotesSyncService:
         
         adapter = self._get_cache_adapter()
         akshare = self._get_akshare_provider()
+        baostock = self._get_baostock_provider()
         
         # 计算同步范围（一年交易日）
         one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
@@ -88,16 +97,47 @@ class DailyQuotesSyncService:
                     results['skipped'] += 1
                     continue
                 
-                # 获取数据
-                data = await akshare.get_historical_data(symbol, fetch_start, fetch_end)
+                # 获取数据（AKShare 优先，BaoStock 降级）
+                data = None
+                data_source = None
                 
-                if data and not data.empty:
+                # 尝试 AKShare
+                try:
+                    data = await akshare.get_historical_data(symbol, fetch_start, fetch_end)
+                    if data is not None and not data.empty:
+                        data_source = 'akshare'
+                        logger.debug(f"✅ [{symbol}] AKShare 获取成功")
+                    else:
+                        data = None  # 清空无效数据
+                except Exception as ak_err:
+                    logger.warning(f"⚠️ [{symbol}] AKShare 失败: {str(ak_err)[:30]}，尝试 BaoStock")
+                    data = None
+                
+                # AKShare 失败 → 尝试 BaoStock
+                if data is None:
+                    try:
+                        data = await baostock.get_historical_data(symbol, fetch_start, fetch_end)
+                        if data is not None and not data.empty:
+                            data_source = 'baostock'
+                            logger.info(f"✅ [{symbol}] BaoStock 降级成功")
+                        else:
+                            data = None
+                    except Exception as bs_err:
+                        logger.error(f"❌ [{symbol}] BaoStock 也失败: {str(bs_err)[:30]}")
+                        data = None
+                
+                if data is not None and not data.empty:
                     # 写入 MongoDB
-                    adapter.save_historical_data_bulk(symbol, data, 'akshare')
+                    adapter.save_historical_data_bulk(symbol, data, data_source)
+                    
+                    # 获取日期字段名（BaoStock 用 'date', AKShare 用 'trade_date'）
+                    date_field = 'date' if data_source == 'baostock' else 'trade_date'
+                    if date_field not in data.columns:
+                        date_field = 'date'  # 兜底
                     
                     # 更新元数据
-                    earliest = data['trade_date'].min()
-                    latest = data['trade_date'].max()
+                    earliest = data[date_field].min()
+                    latest = data[date_field].max()
                     is_complete = earliest <= one_year_ago and latest >= latest_closed
                     
                     adapter.update_cache_metadata(
