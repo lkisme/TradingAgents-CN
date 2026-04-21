@@ -130,23 +130,28 @@ class DailyQuotesSyncService:
                     # 写入 MongoDB
                     adapter.save_historical_data_bulk(symbol, data, data_source)
                     
-                    # 获取日期字段名（BaoStock 用 'date', AKShare 用 'trade_date'）
-                    date_field = 'date' if data_source == 'baostock' else 'trade_date'
-                    if date_field not in data.columns:
-                        date_field = 'date'  # 兜底
+                    # ✅ 从数据库统计实际数据（包括历史数据）
+                    actual_stats = adapter.get_historical_data_stats(symbol)
                     
-                    # 更新元数据
-                    earliest = data[date_field].min()
-                    latest = data[date_field].max()
-                    is_complete = earliest <= one_year_ago and latest >= latest_closed
+                    # 计算完整性（使用实际统计）
+                    actual_earliest = actual_stats.get('earliest_date')
+                    actual_latest = actual_stats.get('latest_date')
+                    actual_total = actual_stats.get('total_records', 0)
                     
+                    is_complete = (
+                        actual_earliest and actual_latest and 
+                        str(actual_earliest) <= str(one_year_ago) and 
+                        str(actual_latest) >= str(latest_closed)
+                    )
+                    
+                    # 更新元数据（使用实际统计）
                     adapter.update_cache_metadata(
                         symbol=symbol,
-                        earliest_date=earliest,
-                        latest_date=latest,
-                        total_records=len(data),
+                        earliest_date=actual_earliest,
+                        latest_date=actual_latest,
+                        total_records=actual_total,
                         is_complete=is_complete,
-                        data_source='akshare'
+                        data_source=data_source  # ← 使用本次同步的数据源
                     )
                     
                     results['success'] += 1

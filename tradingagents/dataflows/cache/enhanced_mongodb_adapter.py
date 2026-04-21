@@ -104,6 +104,39 @@ class EnhancedMongoDBCacheAdapter:
             logger.error(f"获取缓存元数据失败: {e}")
             return None
     
+    def get_historical_data_stats(self, code: str) -> dict:
+        """
+        从数据库统计实际历史数据（earliest, latest, total_records）
+        
+        Args:
+            code: 股票代码（stock_daily_quotes 使用 code 字段）
+        
+        Returns:
+            dict: {'earliest_date': str|None, 'latest_date': str|None, 'total_records': int}
+        """
+        try:
+            db = self._get_db()
+            stats = db.stock_daily_quotes.aggregate([
+                {"$match": {"code": code}},
+                {"$group": {
+                    "_id": None,
+                    "earliest_date": {"$min": "$trade_date"},
+                    "latest_date": {"$max": "$trade_date"},
+                    "total_records": {"$sum": 1}
+                }}
+            ])
+            result = list(stats)
+            if result:
+                return {
+                    "earliest_date": result[0]["earliest_date"],
+                    "latest_date": result[0]["latest_date"],
+                    "total_records": result[0]["total_records"]
+                }
+            return {"earliest_date": None, "latest_date": None, "total_records": 0}
+        except Exception as e:
+            logger.error(f"统计历史数据失败: {e}")
+            return {"earliest_date": None, "latest_date": None, "total_records": 0}
+    
     def update_cache_metadata(
         self,
         symbol: str,
@@ -189,6 +222,20 @@ class EnhancedMongoDBCacheAdapter:
         """
         if data.empty:
             logger.warning(f"[{symbol}] 数据为空，跳过写入")
+            return
+        
+        # ✅ 处理 NaN 值（关键修复：BaoStock 数据可能有 NaN）
+        # 关键字段（价格）不能为 NaN，删除这些行
+        key_columns = ['open', 'high', 'low', 'close']
+        data = data.dropna(subset=[col for col in key_columns if col in data.columns])
+        
+        # 非关键字段（volume, amount）可以填充为 0
+        for col in ['volume', 'vol', 'amount', 'pct_chg', 'change_percent']:
+            if col in data.columns:
+                data[col] = data[col].fillna(0)
+        
+        if data.empty:
+            logger.warning(f"[{symbol}] 清理 NaN 后数据为空，跳过写入")
             return
         
         try:
