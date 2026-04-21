@@ -165,8 +165,10 @@ class ResilientChinaStockProviderEnhanced:
         else:
             merged = new_data
         
-        earliest = merged['trade_date'].min()
-        latest = merged['trade_date'].max()
+        # ✅ 兼容字段名差异（BaoStock 用 'date', AKShare 用 'trade_date'）
+        date_field = 'trade_date' if 'trade_date' in merged.columns else 'date'
+        earliest = merged[date_field].min()
+        latest = merged[date_field].max()
         
         # 验证完整性
         one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
@@ -193,6 +195,12 @@ class ResilientChinaStockProviderEnhanced:
         Returns:
             DataFrame: 合并后的数据
         """
+        # ✅ 统一日期字段名（BaoStock 用 'date', AKShare 用 'trade_date'）
+        if 'date' in new.columns and 'trade_date' not in new.columns:
+            new = new.rename(columns={'date': 'trade_date'})
+        if 'date' in existing.columns and 'trade_date' not in existing.columns:
+            existing = existing.rename(columns={'date': 'trade_date'})
+        
         merged = pd.concat([existing, new])
         merged = merged.drop_duplicates(subset=['trade_date'], keep='last')
         merged = merged.sort_values('trade_date')
