@@ -161,7 +161,7 @@ class DailyQuotesSyncService:
             价格数值
         """
         try:
-            match = re.search(f'{field}:\\s*(\\d+\\.\\d+)', text)
+            match = re.search(f'{field}:\\s*(\\d+(?:\\.\\d+)?)', text)
             if match:
                 return float(match.group(1))
         except Exception as e:
