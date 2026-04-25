@@ -170,8 +170,10 @@ class SinaKlineSyncService:
 
     async def get_incomplete_stocks(self) -> List[str]:
         """
-        获取所有不完整的股票列表
-
+        获取股票池中不完整的股票列表
+        
+        股票池来源：Top120 + 当前持仓（由 stock_pool_service 提供）
+        
         Returns:
             不完整股票代码列表
         """
@@ -179,16 +181,30 @@ class SinaKlineSyncService:
             await self.initialize()
 
         try:
-            cursor = self.db.cache_metadata.find(
-                {"collection": "stock_daily_quotes", "is_complete": False},
-                {"symbol": 1}
-            )
-            symbols = []
-            for doc in await cursor.to_list(length=None):
-                symbols.append(doc["symbol"])
-
-            logger.info(f"📋 查询到 {len(symbols)} 只不完整股票")
-            return symbols
+            # 1. 获取股票池（Top120 + 持仓）
+            from app.services.stock_pool_service import get_stock_pool_for_sync
+            stock_pool = await get_stock_pool_for_sync()
+            
+            if not stock_pool:
+                logger.warning("⚠️ 股票池为空")
+                return []
+            
+            logger.info(f"📊 股票池: {len(stock_pool)} 只")
+            
+            # 2. 过滤出不完整的股票
+            incomplete_stocks = []
+            for symbol in stock_pool:
+                # 查询缓存元数据
+                meta = await self.db.cache_metadata.find_one(
+                    {"symbol": symbol, "collection": "stock_daily_quotes"}
+                )
+                
+                # 不完整的情况：无元数据 或 is_complete=False
+                if not meta or not meta.get("is_complete", False):
+                    incomplete_stocks.append(symbol)
+            
+            logger.info(f"📋 查询到 {len(incomplete_stocks)} 只不完整股票")
+            return incomplete_stocks
 
         except Exception as e:
             logger.error(f"❌ 查询不完整股票失败: {e}")
