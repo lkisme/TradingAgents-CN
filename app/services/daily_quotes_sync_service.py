@@ -134,7 +134,7 @@ class DailyQuotesSyncService:
                 try:
                     akshare_provider = self._get_akshare_provider()
                     if akshare_provider:
-                        realtime_quotes = await akshare_provider.get_realtime_quotes(symbol)
+                        realtime_quotes = await akshare_provider.get_stock_quotes(symbol)
                         if realtime_quotes and realtime_quotes.get('amount') is not None and realtime_quotes['amount'] > 0:
                             realtime_data = realtime_quotes
                             amount_source = realtime_quotes.get('quote_source', 'akshare_realtime')
