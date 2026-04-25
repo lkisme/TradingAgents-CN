@@ -8,11 +8,14 @@ Daily Quotes Sync Service
 - Gap > 1 天 → 跳过，记录需要手动补充
 """
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import pandas as pd
 import logging
 import asyncio
 import random
+import re
+import aiohttp
+import json
 import requests
 
 logger = logging.getLogger(__name__)
@@ -30,6 +33,7 @@ class DailyQuotesSyncService:
         self.retry_base_delay = 1.0  # 基础延迟（秒）
         self.request_interval_min = 0.3  # 最小请求间隔（秒）
         self.request_interval_max = 0.6  # 最大请求间隔（秒）
+        self.xueqiu_mcp_url = "http://172.27.173.169:3002/mcp"  # xueqiu-mcp服务地址（宿主机IP）
         # 需要手动补充历史数据的股票列表
         self.need_manual_sync: List[str] = []
     
@@ -79,6 +83,198 @@ class DailyQuotesSyncService:
             self._baostock_provider = get_baostock_provider()
         return self._baostock_provider
     
+    def _get_full_symbol(self, symbol: str) -> str:
+        """
+        将6位股票代码转换为雪球格式
+        
+        Args:
+            symbol: 6位股票代码
+            
+        Returns:
+            雪球格式代码，如 SH600036
+        """
+        # 根据股票代码判断市场
+        if symbol.startswith('6'):
+            return f"SH{symbol}"  # 上海
+        elif symbol.startswith('0') or symbol.startswith('3'):
+            return f"SZ{symbol}"  # 深圳
+        elif symbol.startswith('4') or symbol.startswith('8'):
+            return f"BJ{symbol}"  # 北京
+        else:
+            return f"SH{symbol}"  # 默认上海
+    
+    def _parse_xueqiu_amount(self, text: str) -> Optional[float]:
+        """
+        解析雪球返回的成交额文本
+        
+        Args:
+            text: 成交额文本，如 "24.86亿"
+            
+        Returns:
+            成交额数值（元）
+        """
+        try:
+            match = re.search(r'成交额:\s*(\d+\.\d+)(亿|万)', text)
+            if match:
+                amount = float(match.group(1))
+                unit = match.group(2)
+                if unit == '亿':
+                    return amount * 100000000  # 亿转元
+                elif unit == '万':
+                    return amount * 10000  # 万转元
+        except Exception as e:
+            logger.warning(f"解析成交额失败: {str(e)[:30]}")
+        return None
+    
+    def _parse_xueqiu_volume(self, text: str) -> Optional[int]:
+        """
+        解析雪球返回的成交量文本
+        
+        Args:
+            text: 成交量文本，如 "6294.14万"
+            
+        Returns:
+            成交量数值（股）
+        """
+        try:
+            match = re.search(r'成交量:\s*(\d+\.\d+)(亿|万)', text)
+            if match:
+                volume = float(match.group(1))
+                unit = match.group(2)
+                if unit == '亿':
+                    return int(volume * 100000000)  # 亿转股
+                elif unit == '万':
+                    return int(volume * 10000)  # 万转股
+        except Exception as e:
+            logger.warning(f"解析成交量失败: {str(e)[:30]}")
+        return None
+    
+    def _parse_xueqiu_price(self, text: str, field: str) -> Optional[float]:
+        """
+        解析雪球返回的价格字段
+        
+        Args:
+            text: 返回文本
+            field: 字段名，如 '今开', '最高', '最低', '昨收'
+            
+        Returns:
+            价格数值
+        """
+        try:
+            match = re.search(f'{field}:\\s*(\\d+\\.\\d+)', text)
+            if match:
+                return float(match.group(1))
+        except Exception as e:
+            logger.warning(f"解析{field}失败: {str(e)[:30]}")
+        return None
+    
+    def _parse_xueqiu_trade_date(self, text: str) -> Optional[str]:
+        """
+        解析雪球返回的交易日期
+        
+        Args:
+            text: 返回文本
+            
+        Returns:
+            交易日期，如 2026-04-24
+        """
+        try:
+            match = re.search(r'(\d{4}/\d{1,2}/\d{1,2})', text)
+            if match:
+                date_str = match.group(1)
+                # 转换为 YYYY-MM-DD 格式
+                parts = date_str.split('/')
+                return f"{parts[0]}-{parts[1].zfill(2)}-{parts[2].zfill(2)}"
+        except Exception as e:
+            logger.warning(f"解析交易日期失败: {str(e)[:30]}")
+        return None
+    
+    async def _get_xueqiu_quotes(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        从xueqiu-mcp获取实时行情（HTTP调用）
+        
+        Args:
+            symbol: 6位股票代码
+            
+        Returns:
+            标准化的行情数据（含amount）
+        """
+        try:
+            full_symbol = self._get_full_symbol(symbol)
+            
+            # 构建MCP请求
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "id": 1,
+                "params": {
+                    "name": "get_stock",
+                    "arguments": {
+                        "symbol": full_symbol
+                    }
+                }
+            }
+            
+            # 发送HTTP请求
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.xueqiu_mcp_url,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream"
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status != 200:
+                        logger.warning(f"⚠️ [{symbol}] xueqiu-mcp HTTP错误: {response.status}")
+                        return None
+                    
+                    # 解析SSE响应
+                    text = await response.text()
+                    
+                    # 从SSE格式中提取JSON
+                    for line in text.split('\n'):
+                        if line.startswith('data: '):
+                            data_json = line[6:]  # 去掉 'data: ' prefix
+                            data = json.loads(data_json)
+                            
+                            if 'result' in data and 'content' in data['result']:
+                                content_text = data['result']['content'][0]['text']
+                                
+                                # 解析成交额
+                                amount = self._parse_xueqiu_amount(content_text)
+                                if amount is None or amount <= 0:
+                                    logger.warning(f"⚠️ [{symbol}] xueqiu-mcp无成交额数据")
+                                    return None
+                                
+                                # 解析其他字段
+                                result = {
+                                    'code': symbol,
+                                    'amount': amount,
+                                    'close': self._parse_xueqiu_price(content_text, '现价') or 0,
+                                    'open': self._parse_xueqiu_price(content_text, '今开') or 0,
+                                    'high': self._parse_xueqiu_price(content_text, '最高') or 0,
+                                    'low': self._parse_xueqiu_price(content_text, '最低') or 0,
+                                    'pre_close': self._parse_xueqiu_price(content_text, '昨收') or 0,
+                                    'volume': self._parse_xueqiu_volume(content_text) or 0,
+                                    'trade_date': self._parse_xueqiu_trade_date(content_text),
+                                    'quote_source': 'xueqiu_mcp'
+                                }
+                                
+                                logger.info(f"✅ [{symbol}] xueqiu-mcp获取成功: amount={amount}")
+                                return result
+            
+            logger.warning(f"⚠️ [{symbol}] xueqiu-mcp返回格式异常")
+            return None
+            
+        except asyncio.TimeoutError:
+            logger.warning(f"⚠️ [{symbol}] xueqiu-mcp超时")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ [{symbol}] xueqiu-mcp获取失败: {str(e)[:50]}")
+            return None
+
     async def fix_sina_kline_amount(self, stock_pool: List[str]) -> Dict:
         """
         修复新浪K线数据的amount字段
@@ -127,25 +323,35 @@ class DailyQuotesSyncService:
                 if not record:
                     continue
                 
-                # 从 AKShare/BaoStock 获取实时行情数据（含amount）
+                # 从xueqiu-mcp和AKShare获取实时行情数据（含amount）
                 realtime_data = None
                 amount_source = None
                 
-                # 尝试 AKShare
+                # [1] 先尝试 xueqiu-mcp
                 try:
-                    akshare_provider = self._get_akshare_provider()
-                    if akshare_provider:
-                        realtime_quotes = await akshare_provider.get_stock_quotes(symbol)
-                        if realtime_quotes and realtime_quotes.get('amount') is not None and realtime_quotes['amount'] > 0:
-                            realtime_data = realtime_quotes
-                            amount_source = realtime_quotes.get('quote_source', 'akshare_realtime')
-                            logger.debug(f"📊 [{symbol}] AKShare实时行情: amount={realtime_quotes['amount']}")
+                    realtime_data = await self._get_xueqiu_quotes(symbol)
+                    if realtime_data and realtime_data.get('amount') > 0:
+                        amount_source = 'xueqiu_mcp'
+                        logger.debug(f"📊 [{symbol}] xueqiu-mcp实时行情: amount={realtime_data['amount']}")
                 except Exception as e:
-                    logger.warning(f"⚠️ [{symbol}] AKShare实时行情失败: {str(e)[:30]}")
+                    logger.warning(f"⚠️ [{symbol}] xueqiu-mcp实时行情失败: {str(e)[:30]}")
                 
-                # 实时行情获取失败，保留 amount=0
+                # [2] xueqiu-mcp失败 → 尝试 AKShare
+                if realtime_data is None or realtime_data.get('amount') <= 0:
+                    try:
+                        akshare_provider = self._get_akshare_provider()
+                        if akshare_provider:
+                            realtime_quotes = await akshare_provider.get_stock_quotes(symbol)
+                            if realtime_quotes and realtime_quotes.get('amount') is not None and realtime_quotes['amount'] > 0:
+                                realtime_data = realtime_quotes
+                                amount_source = realtime_quotes.get('quote_source', 'akshare_realtime')
+                                logger.debug(f"📊 [{symbol}] AKShare实时行情: amount={realtime_quotes['amount']}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ [{symbol}] AKShare实时行情失败: {str(e)[:30]}")
+                
+                # [3] 全失败 → 保留 amount=0
                 if realtime_data is None or realtime_data.get('amount') is None or realtime_data['amount'] <= 0:
-                    logger.info(f"📝 [{symbol}] 实时行情无amount数据，保留原值0")
+                    logger.info(f"📝 [{symbol}] 所有实时行情API失败，保留原值0")
                     continue
                 
                 # 更新 amount（来自实时行情API）
