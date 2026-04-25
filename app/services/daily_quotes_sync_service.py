@@ -28,7 +28,8 @@ class DailyQuotesSyncService:
         # 重试配置
         self.max_retries = 3  # 最大重试次数
         self.retry_base_delay = 1.0  # 基础延迟（秒）
-        self.request_interval = 0.3  # 每次请求间隔（秒）
+        self.request_interval_min = 0.3  # 最小请求间隔（秒）
+        self.request_interval_max = 0.6  # 最大请求间隔（秒）
         # 需要手动补充历史数据的股票列表
         self.need_manual_sync: List[str] = []
     
@@ -372,7 +373,7 @@ class DailyQuotesSyncService:
         latest_closed = TradingDayUtils.get_latest_closed_trading_day()
         
         logger.info(f"📊 开始同步 {len(stock_pool)} 只股票，使用实时行情 API 补充当天数据")
-        logger.info(f"⚙️ 重试配置: max_retries={self.max_retries}, request_interval={self.request_interval}s")
+        logger.info(f"⚙️ 重试配置: max_retries={self.max_retries}, request_interval={self.request_interval_min}-{self.request_interval_max}s")
         logger.info(f"📅 最近已收盘交易日: {latest_closed}")
         
         # 重置需要手动补充的列表
@@ -415,7 +416,7 @@ class DailyQuotesSyncService:
                 # 🔥 策略调整：Gap <= 1 天 → 使用实时行情 API
                 if gap_days <= 1:
                     # 使用实时行情 API 补充当天数据
-                    await asyncio.sleep(self.request_interval)
+                    await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
                     
                     realtime_quotes = await self._get_realtime_quotes_ef(symbol)
                     
