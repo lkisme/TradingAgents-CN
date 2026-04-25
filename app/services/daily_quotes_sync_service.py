@@ -78,6 +78,159 @@ class DailyQuotesSyncService:
             self._baostock_provider = get_baostock_provider()
         return self._baostock_provider
     
+    async def fix_sina_kline_amount(self, stock_pool: List[str]) -> Dict:
+        """
+        修复新浪K线数据的amount字段
+        
+        只修复：
+        - 股票池中的股票
+        - data_source=sina_kline
+        - amount=0
+        - 上一个已收盘交易日
+        
+        Args:
+            stock_pool: 股票代码列表
+        
+        Returns:
+            {'fixed': int, 'diffs': list}
+        """
+        from tradingagents.utils.trading_day_utils import TradingDayUtils
+        from tradingagents.config.database_manager import get_database_manager
+        
+        results = {'fixed': 0, 'diffs': []}
+        
+        # 获取上一个已收盘交易日
+        latest_closed = TradingDayUtils.get_latest_closed_trading_day()
+        
+        # 获取数据库连接
+        db_manager = get_database_manager()
+        mongodb_client = db_manager.get_mongodb_client()
+        if mongodb_client is None:
+            logger.error("MongoDB 客户端不可用")
+            return results
+        
+        db = mongodb_client['tradingagents']
+        
+        logger.info(f"🔧 开始修复 sina_kline amount=0 的记录，日期: {latest_closed}")
+        
+        for symbol in stock_pool:
+            try:
+                # 查询需要修复的记录
+                record = db.stock_daily_quotes.find_one({
+                    "code": symbol,
+                    "data_source": "sina_kline",
+                    "trade_date": latest_closed,
+                    "amount": 0
+                })
+                
+                if not record:
+                    continue
+                
+                # 从 AKShare/BaoStock 获取实时行情数据（含amount）
+                realtime_data = None
+                amount_source = None
+                
+                # 尝试 AKShare
+                try:
+                    akshare_provider = self._get_akshare_provider()
+                    if akshare_provider:
+                        realtime_quotes = await akshare_provider.get_realtime_quotes(symbol)
+                        if realtime_quotes and realtime_quotes.get('amount') is not None and realtime_quotes['amount'] > 0:
+                            realtime_data = realtime_quotes
+                            amount_source = 'akshare_realtime'
+                            logger.debug(f"📊 [{symbol}] AKShare实时行情: amount={realtime_quotes['amount']}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [{symbol}] AKShare实时行情失败: {str(e)[:30]}")
+                
+                # 尝试 BaoStock（如果 AKShare 失败）
+                if realtime_data is None:
+                    try:
+                        baostock_provider = self._get_baostock_provider()
+                        if baostock_provider:
+                            # BaoStock 无实时行情API，使用估算
+                            logger.debug(f"📊 [{symbol}] BaoStock无实时行情API")
+                    except Exception as e:
+                        logger.warning(f"⚠️ [{symbol}] BaoStock失败: {str(e)[:30]}")
+                
+                if realtime_data and realtime_data.get('amount') is not None and realtime_data['amount'] > 0:
+                    # 实时行情API有amount
+                    new_amount = realtime_data['amount']
+                    amount_source = realtime_data.get('quote_source', amount_source)
+                else:
+                    # 实时行情API无amount（非交易时段），使用估算
+                    if record.get('volume') and record.get('close'):
+                        new_amount = round(record['volume'] * record['close'] * 100, 2)
+                        amount_source = 'estimated'
+                        logger.info(f"📊 [{symbol}] 使用估算amount: volume={record['volume']} × close={record['close']} × 100 = {new_amount}")
+                
+                if new_amount is None:
+                    logger.warning(f"⚠️ [{symbol}] 无法获取或估算amount")
+                    continue
+                db.stock_daily_quotes.update_one(
+                    {"_id": record["_id"]},
+                    {"$set": {"amount": new_amount}}
+                )
+                
+                results['fixed'] += 1
+                logger.info(f"✅ [{symbol}] amount 更新: 0 -> {new_amount} ({amount_source})")
+                
+                # 对比差异（只在实时行情API有数据时）
+                if realtime_data and amount_source != 'estimated':
+                    diff_info = self._compare_and_log_diff(symbol, record, realtime_data, latest_closed)
+                    if diff_info:
+                        results['diffs'].append(diff_info)
+                
+            except Exception as e:
+                logger.error(f"❌ [{symbol}] 修复amount失败: {str(e)[:50]}")
+        
+        logger.info(f"🔧 amount修复完成: 固定 {results['fixed']} 条，差异 {len(results['diffs'])} 条")
+        return results
+    
+    def _compare_and_log_diff(self, symbol: str, record: Dict, realtime: Dict, trade_date: str) -> Optional[str]:
+        """
+        对比已有数据与实时行情数据
+        
+        对比字段：open, high, low, close, volume
+        差异阈值：相对差异 > 1%
+        日志级别：WARNING
+        
+        Args:
+            symbol: 股票代码
+            record: 已有数据记录
+            realtime: 实时行情数据
+            trade_date: 交易日期
+        
+        Returns:
+            差异信息字符串（如有差异）
+        """
+        fields = [
+            ('open', '开盘价'),
+            ('high', '最高价'),
+            ('low', '最低价'),
+            ('close', '收盘价'),
+            ('volume', '成交量'),
+        ]
+        diffs = []
+        
+        for field, name in fields:
+            old_val = record.get(field)
+            new_val = realtime.get(field)
+            
+            if old_val is None or new_val is None:
+                continue
+            
+            if old_val > 0:
+                diff_pct = abs(new_val - old_val) / old_val * 100
+                if diff_pct > 1.0:  # 差异超过 1%
+                    diffs.append(f"{name}: {old_val} -> {new_val} ({diff_pct:.2f}%)")
+        
+        if diffs:
+            diff_info = f"{symbol} {trade_date}: {', '.join(diffs)}"
+            logger.warning(f"⚠️ 数据差异 {diff_info}")
+            return diff_info
+        
+        return None
+    
     async def _get_realtime_quotes_ef(self, symbol: str) -> Optional[Dict]:
         """
         使用东方财富实时行情 API 获取当天数据
@@ -357,6 +510,11 @@ class DailyQuotesSyncService:
         # 失败超过 10% → 发送通知
         if results['failed'] > len(stock_pool) * 0.1:
             logger.warning(f"⚠️ 日线同步失败率 {results['failed']}/{len(stock_pool)}")
+        
+        # 🔥 新增：修复 sina_kline 数据的 amount 字段
+        fix_results = await self.fix_sina_kline_amount(stock_pool)
+        results['amount_fixed'] = fix_results.get('fixed', 0)
+        results['amount_diffs'] = fix_results.get('diffs', [])
         
         return results
 
