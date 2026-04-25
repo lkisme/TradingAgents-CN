@@ -574,14 +574,14 @@ async def lifespan(app: FastAPI):
 
         from app.services.daily_quotes_scheduler import job_sync_daily_quotes
 
-        # 每日 16:30 同步日线数据（收盘后）
+        # 每日 20:00 同步日线数据（错峰执行，避开收盘后高峰）
         scheduler.add_job(
             job_sync_daily_quotes,
-            CronTrigger(hour=16, minute=30, timezone=settings.TIMEZONE),
+            CronTrigger(hour=20, minute=0, timezone=settings.TIMEZONE),
             id="daily_quotes_cache_sync",
             name="日线数据缓存同步（MongoDB）"
         )
-        logger.info(f"📅 日线数据缓存同步已配置: 16:30 ({settings.TIMEZONE})")
+        logger.info(f"📅 日线数据缓存同步已配置: 20:00 ({settings.TIMEZONE})")
 
         scheduler.start()
 

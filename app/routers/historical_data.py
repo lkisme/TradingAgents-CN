@@ -3,17 +3,116 @@
 历史数据查询API
 提供统一的历史K线数据查询接口
 """
+import asyncio
 import logging
 from datetime import datetime, date
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 
 from app.services.historical_data_service import get_historical_data_service
+from app.services.sina_kline_sync_service import get_sina_kline_sync_service, SinaKlineSyncService
+from app.models.sina_sync_request import SinaSyncRequest
+from app.routers.auth_db import get_current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/historical-data", tags=["历史数据"])
+
+
+# ==================== 新浪 K 线同步 API ====================
+
+
+@router.post("/sync-from-sina")
+async def sync_from_sina(
+    request: SinaSyncRequest,
+    user: dict = Depends(get_current_user)
+):
+    """
+    从新浪同步历史日线数据
+    
+    - 增量更新：只插入不存在的新数据
+    - 数据范围：最近 datalen 条（最大 1023，约 4 年）
+    - 执行方式：顺序执行，不并发
+    - 限流保护：每次请求后随机间隔 0.3-0.6 秒
+    
+    权限：仅管理员可调用
+    """
+    # 权限检查
+    if not user.get("is_admin", False):
+        raise HTTPException(status_code=403, detail="仅管理员可调用")
+    
+    # 获取服务实例
+    service = await get_sina_kline_sync_service()
+    
+    # 确定同步列表
+    if request.symbols:
+        # 用户指定股票列表
+        symbols = request.symbols
+        logger.info(f"🔄 用户指定同步: {len(symbols)} 只股票")
+    else:
+        # 默认：查询所有不完整的股票
+        symbols = await service.get_incomplete_stocks()
+        logger.info(f"🔄 自动查询不完整股票: {len(symbols)} 只")
+    
+    # 如果列表为空
+    if not symbols:
+        return {
+            "success": True,
+            "data": {
+                "synced": 0,
+                "skipped": 0,
+                "failed": 0,
+                "total_new": 0,
+                "symbols_count": 0,
+                "details": []
+            },
+            "message": "没有需要同步的股票"
+        }
+    
+    # 执行同步（顺序执行，不并发）
+    results = []
+    total_new = 0
+    
+    for symbol in symbols:
+        try:
+            result = await service.sync_single_stock(symbol, request.datalen)
+            results.append(result)
+            total_new += result.get("new_records", 0)
+            
+            # 随机间隔 0.3-0.6 秒（避免 API 限流）
+            interval = service._get_random_interval()
+            await asyncio.sleep(interval)
+            
+        except Exception as e:
+            logger.error(f"❌ {symbol} 同步异常: {e}")
+            results.append({
+                "symbol": symbol,
+                "error": str(e)[:50],
+                "status": "failed"
+            })
+    
+    # 统计结果
+    synced = len([r for r in results if r.get("status") == "success"])
+    skipped = len([r for r in results if r.get("status") == "skipped"])
+    failed = len([r for r in results if r.get("status") == "failed"])
+    
+    return {
+        "success": True,
+        "data": {
+            "synced": synced,
+            "skipped": skipped,
+            "failed": failed,
+            "total_new": total_new,
+            "symbols_count": len(symbols),
+            "details": results
+        },
+        "message": f"同步完成: 成功 {synced} 只，跳过 {skipped} 只，失败 {failed} 只，新增 {total_new} 条数据"
+    }
+
+
+# ==================== 原有历史数据查询 API ====================
+
 
 
 class HistoricalDataQuery(BaseModel):
