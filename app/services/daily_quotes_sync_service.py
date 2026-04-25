@@ -137,35 +137,18 @@ class DailyQuotesSyncService:
                         realtime_quotes = await akshare_provider.get_realtime_quotes(symbol)
                         if realtime_quotes and realtime_quotes.get('amount') is not None and realtime_quotes['amount'] > 0:
                             realtime_data = realtime_quotes
-                            amount_source = 'akshare_realtime'
+                            amount_source = realtime_quotes.get('quote_source', 'akshare_realtime')
                             logger.debug(f"📊 [{symbol}] AKShare实时行情: amount={realtime_quotes['amount']}")
                 except Exception as e:
                     logger.warning(f"⚠️ [{symbol}] AKShare实时行情失败: {str(e)[:30]}")
                 
-                # 尝试 BaoStock（如果 AKShare 失败）
-                if realtime_data is None:
-                    try:
-                        baostock_provider = self._get_baostock_provider()
-                        if baostock_provider:
-                            # BaoStock 无实时行情API，使用估算
-                            logger.debug(f"📊 [{symbol}] BaoStock无实时行情API")
-                    except Exception as e:
-                        logger.warning(f"⚠️ [{symbol}] BaoStock失败: {str(e)[:30]}")
-                
-                if realtime_data and realtime_data.get('amount') is not None and realtime_data['amount'] > 0:
-                    # 实时行情API有amount
-                    new_amount = realtime_data['amount']
-                    amount_source = realtime_data.get('quote_source', amount_source)
-                else:
-                    # 实时行情API无amount（非交易时段），使用估算
-                    if record.get('volume') and record.get('close'):
-                        new_amount = round(record['volume'] * record['close'] * 100, 2)
-                        amount_source = 'estimated'
-                        logger.info(f"📊 [{symbol}] 使用估算amount: volume={record['volume']} × close={record['close']} × 100 = {new_amount}")
-                
-                if new_amount is None:
-                    logger.warning(f"⚠️ [{symbol}] 无法获取或估算amount")
+                # 实时行情获取失败，保留 amount=0
+                if realtime_data is None or realtime_data.get('amount') is None or realtime_data['amount'] <= 0:
+                    logger.info(f"📝 [{symbol}] 实时行情无amount数据，保留原值0")
                     continue
+                
+                # 更新 amount（来自实时行情API）
+                new_amount = realtime_data['amount']
                 db.stock_daily_quotes.update_one(
                     {"_id": record["_id"]},
                     {"$set": {"amount": new_amount}}
@@ -174,11 +157,10 @@ class DailyQuotesSyncService:
                 results['fixed'] += 1
                 logger.info(f"✅ [{symbol}] amount 更新: 0 -> {new_amount} ({amount_source})")
                 
-                # 对比差异（只在实时行情API有数据时）
-                if realtime_data and amount_source != 'estimated':
-                    diff_info = self._compare_and_log_diff(symbol, record, realtime_data, latest_closed)
-                    if diff_info:
-                        results['diffs'].append(diff_info)
+                # 对比差异
+                diff_info = self._compare_and_log_diff(symbol, record, realtime_data, latest_closed)
+                if diff_info:
+                    results['diffs'].append(diff_info)
                 
             except Exception as e:
                 logger.error(f"❌ [{symbol}] 修复amount失败: {str(e)[:50]}")
