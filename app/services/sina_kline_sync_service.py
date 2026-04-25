@@ -241,8 +241,8 @@ class SinaKlineSyncService:
                         "status": "failed"
                     }
 
-            # 5. 更新缓存元数据
-            self._update_metadata(symbol, sina_data)
+            # 5. 更新缓存元数据（异步）
+            await self._update_metadata(symbol, sina_data)
 
             # 6. 返回结果
             return {
@@ -260,9 +260,9 @@ class SinaKlineSyncService:
                 "status": "failed"
             }
 
-    def _update_metadata(self, symbol: str, data: List[Dict]):
+    async def _update_metadata(self, symbol: str, data: List[Dict]):
         """
-        更新缓存元数据
+        更新缓存元数据（异步）
 
         Args:
             symbol: 股票代码
@@ -290,11 +290,11 @@ class SinaKlineSyncService:
                 latest_date >= latest_closed
             )
 
-            # 统计总记录数
-            total_records = self.db.stock_daily_quotes.count_documents({"code": symbol})
+            # 统计总记录数（异步）
+            total_records = await self.db.stock_daily_quotes.count_documents({"code": symbol})
 
-            # 更新或插入元数据
-            self.db.cache_metadata.update_one(
+            # 更新或插入元数据（异步）
+            await self.db.cache_metadata.update_one(
                 {"symbol": symbol, "collection": "stock_daily_quotes"},
                 {"$set": {
                     "earliest_date": earliest_date,
