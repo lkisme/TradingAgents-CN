@@ -611,38 +611,28 @@ class DailyQuotesSyncService:
                     results['skipped'] += 1
                     continue
                 
-                # 🔥 判断 Gap 大小
-                # 计算 Gap 天数
+                # 🔥 计算 Gap 天数（用于日志记录）
                 gap_days = 0
                 if metadata and metadata.get('latest_date'):
                     from datetime import datetime as dt
                     gap_days = (dt.strptime(latest_closed, '%Y-%m-%d') - 
                                dt.strptime(metadata['latest_date'], '%Y-%m-%d')).days
                 
-                # 🔥 策略调整：Gap <= 1 天 → 使用实时行情 API
-                if gap_days <= 1:
-                    # 使用实时行情 API 补充当天数据
-                    await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
-                    
-                    realtime_quotes = await self._get_realtime_quotes_ef(symbol)
-                    
-                    if realtime_quotes:
-                        # 转换为日线格式
-                        daily_data = self._convert_realtime_to_daily_format(realtime_quotes)
-                        data = daily_data
-                        data_source = 'eastmoney_realtime'
-                        logger.info(f"✅ [{symbol}] 实时行情同步成功（Gap={gap_days}天）")
-                    else:
-                        results['failed'] += 1
-                        results['errors'].append(f"{symbol}: 实时行情获取失败")
-                        logger.warning(f"⚠️ [{symbol}] 实时行情获取失败")
-                        continue
+                # 🔥 策略调整：无论 Gap 多大，都使用实时行情 API 补充当天数据
+                await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
                 
-                # 🔥 Gap > 1 天 → 记录需要手动补充，跳过
+                realtime_quotes = await self._get_realtime_quotes_ef(symbol)
+                
+                if realtime_quotes:
+                    # 转换为日线格式
+                    daily_data = self._convert_realtime_to_daily_format(realtime_quotes)
+                    data = daily_data
+                    data_source = 'eastmoney_realtime'
+                    logger.info(f"✅ [{symbol}] 实时行情同步成功（Gap={gap_days}天）")
                 else:
-                    self.need_manual_sync.append(symbol)
-                    results['skipped'] += 1
-                    logger.info(f"📝 [{symbol}] Gap={gap_days}天，需要手动补充历史数据，跳过自动同步")
+                    results['failed'] += 1
+                    results['errors'].append(f"{symbol}: 实时行情获取失败")
+                    logger.warning(f"⚠️ [{symbol}] 实时行情获取失败")
                     continue
                 
                 if data is not None and not data.empty:
