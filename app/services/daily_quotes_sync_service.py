@@ -33,7 +33,7 @@ class DailyQuotesSyncService:
         self.retry_base_delay = 1.0  # 基础延迟（秒）
         self.request_interval_min = 0.3  # 最小请求间隔（秒）
         self.request_interval_max = 0.6  # 最大请求间隔（秒）
-        self.xueqiu_mcp_url = "http://172.27.173.169:3002/mcp"  # xueqiu-mcp服务地址（宿主机IP）
+        self.xueqiu_mcp_url = "http://172.27.173.169:3000/mcp"  # xueqiu-mcp服务地址（宿主机IP）
         # 需要手动补充历史数据的股票列表
         self.need_manual_sync: List[str] = []
     
@@ -621,19 +621,50 @@ class DailyQuotesSyncService:
                 # 🔥 策略调整：无论 Gap 多大，都使用实时行情 API 补充当天数据
                 await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
                 
-                realtime_quotes = await self._get_realtime_quotes_ef(symbol)
+                # [FALLBACK MECHANISM] 实现多层数据源备用机制
+                realtime_quotes = None
+                quote_source = None
                 
-                if realtime_quotes:
-                    # 转换为日线格式
-                    daily_data = self._convert_realtime_to_daily_format(realtime_quotes)
-                    data = daily_data
-                    data_source = 'eastmoney_realtime'
-                    logger.info(f"✅ [{symbol}] 实时行情同步成功（Gap={gap_days}天）")
-                else:
+                # [1] 先尝试东方财富
+                try:
+                    realtime_quotes = await self._get_realtime_quotes_ef(symbol)
+                    if realtime_quotes and realtime_quotes.get('close'):
+                        quote_source = 'eastmoney_realtime'
+                except Exception as e:
+                    logger.warning(f"⚠️ [{symbol}] 东方财富失败: {str(e)[:50]}")
+                
+                # [2] 东方财富失败 → 尝试 xueqiu-mcp
+                if realtime_quotes is None or not realtime_quotes.get('close'):
+                    try:
+                        realtime_quotes = await self._get_xueqiu_quotes(symbol)
+                        if realtime_quotes and realtime_quotes.get('close'):
+                            quote_source = 'xueqiu_mcp'
+                    except Exception as e:
+                        logger.warning(f"⚠️ [{symbol}] xueqiu-mcp失败: {str(e)[:50]}")
+                
+                # [3] xueqiu-mcp失败 → 尝试 AKShare
+                if realtime_quotes is None or not realtime_quotes.get('close'):
+                    try:
+                        akshare_provider = self._get_akshare_provider()
+                        if akshare_provider:
+                            realtime_quotes = await akshare_provider.get_stock_quotes(symbol)
+                            if realtime_quotes and realtime_quotes.get('close'):
+                                quote_source = 'akshare_realtime'
+                    except Exception as e:
+                        logger.warning(f"⚠️ [{symbol}] AKShare失败: {str(e)[:50]}")
+                
+                # [4] 全失败 → 记录错误
+                if realtime_quotes is None or not realtime_quotes.get('close'):
                     results['failed'] += 1
-                    results['errors'].append(f"{symbol}: 实时行情获取失败")
-                    logger.warning(f"⚠️ [{symbol}] 实时行情获取失败")
+                    results['errors'].append(f"{symbol}: 所有实时行情API失败")
+                    logger.warning(f"❌ [{symbol}] 所有实时行情API失败")
                     continue
+                
+                # 成功获取行情 → 转换为日线格式
+                daily_data = self._convert_realtime_to_daily_format(realtime_quotes)
+                data = daily_data
+                data_source = quote_source
+                logger.info(f"✅ [{symbol}] {quote_source}同步成功（Gap={gap_days}天）")
                 
                 if data is not None and not data.empty:
                     # 写入 MongoDB
