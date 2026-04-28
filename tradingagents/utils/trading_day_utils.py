@@ -126,7 +126,7 @@ class TradingDayUtils:
     @classmethod
     def _is_after_market_close(cls, now: datetime) -> bool:
         """
-        检查是否收盘后（15:00 之后）
+        检查是否收盘后（15:00 之后 或 次日凌晨 00:00-09:00）
         
         Args:
             now: 当前时间
@@ -134,7 +134,9 @@ class TradingDayUtils:
         Returns:
             bool: 是否收盘后
         """
-        return now.hour >= 15
+        # 15:00-23:59 → 收盘后
+        # 00:00-09:00 → 次日凌晨，也算收盘后（前一天收盘后）
+        return now.hour >= 15 or now.hour < 9
     
     @classmethod
     def is_after_market_close(cls) -> bool:

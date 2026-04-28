@@ -615,8 +615,11 @@ class DailyQuotesSyncService:
                 gap_days = 0
                 if metadata and metadata.get('latest_date'):
                     from datetime import datetime as dt
+                    # 兼容带时间戳的格式
+                    latest_date_raw = metadata['latest_date']
+                    latest_date_clean = latest_date_raw.split(' ')[0] if ' ' in latest_date_raw else latest_date_raw
                     gap_days = (dt.strptime(latest_closed, '%Y-%m-%d') - 
-                               dt.strptime(metadata['latest_date'], '%Y-%m-%d')).days
+                               dt.strptime(latest_date_clean, '%Y-%m-%d')).days
                 
                 # 🔥 策略调整：无论 Gap 多大，都使用实时行情 API 补充当天数据
                 await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
@@ -627,31 +630,43 @@ class DailyQuotesSyncService:
                 
                 # [1] 先尝试东方财富
                 try:
+                    logger.debug(f"🔍 [{symbol}] 尝试使用东方财富API获取实时行情")
                     realtime_quotes = await self._get_realtime_quotes_ef(symbol)
                     if realtime_quotes and realtime_quotes.get('close'):
                         quote_source = 'eastmoney_realtime'
+                        logger.debug(f"✅ [{symbol}] 东方财富API获取成功")
+                    else:
+                        logger.debug(f"⚠️ [{symbol}] 东方财富API返回数据但无有效收盘价: {realtime_quotes is not None}")
                 except Exception as e:
-                    logger.warning(f"⚠️ [{symbol}] 东方财富失败: {str(e)[:50]}")
+                    logger.warning(f"⚠️ [{symbol}] 东方财富API调用异常: {str(e)[:50]}")
                 
                 # [2] 东方财富失败 → 尝试 xueqiu-mcp
                 if realtime_quotes is None or not realtime_quotes.get('close'):
+                    logger.debug(f"🔍 [{symbol}] 东方财富失败，尝试使用xueqiu-mcp获取实时行情")
                     try:
                         realtime_quotes = await self._get_xueqiu_quotes(symbol)
                         if realtime_quotes and realtime_quotes.get('close'):
                             quote_source = 'xueqiu_mcp'
+                            logger.debug(f"✅ [{symbol}] xueqiu-mcp获取成功")
+                        else:
+                            logger.debug(f"⚠️ [{symbol}] xueqiu-mcp返回数据但无有效收盘价: {realtime_quotes is not None}")
                     except Exception as e:
-                        logger.warning(f"⚠️ [{symbol}] xueqiu-mcp失败: {str(e)[:50]}")
+                        logger.warning(f"⚠️ [{symbol}] xueqiu-mcp调用异常: {str(e)[:50]}")
                 
                 # [3] xueqiu-mcp失败 → 尝试 AKShare
                 if realtime_quotes is None or not realtime_quotes.get('close'):
+                    logger.debug(f"🔍 [{symbol}] xueqiu-mcp失败，尝试使用AKShare获取实时行情")
                     try:
                         akshare_provider = self._get_akshare_provider()
                         if akshare_provider:
                             realtime_quotes = await akshare_provider.get_stock_quotes(symbol)
                             if realtime_quotes and realtime_quotes.get('close'):
                                 quote_source = 'akshare_realtime'
+                                logger.debug(f"✅ [{symbol}] AKShare获取成功")
+                            else:
+                                logger.debug(f"⚠️ [{symbol}] AKShare返回数据但无有效收盘价: {realtime_quotes is not None}")
                     except Exception as e:
-                        logger.warning(f"⚠️ [{symbol}] AKShare失败: {str(e)[:50]}")
+                        logger.warning(f"⚠️ [{symbol}] AKShare调用异常: {str(e)[:50]}")
                 
                 # [4] 全失败 → 记录错误
                 if realtime_quotes is None or not realtime_quotes.get('close'):
