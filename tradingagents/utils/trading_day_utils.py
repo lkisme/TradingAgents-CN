@@ -69,9 +69,14 @@ class TradingDayUtils:
             logger.debug(f"盘中，最近已收盘交易日: {result}")
             return result
         
-        # 盘后（15:00之后）
+        # 盘后（15:00之后 或 次日凌晨）
         if is_trading_day and cls._is_after_market_close(now):
-            # 收盘后，今天已收盘
+            # 凌晨时段（00:00-09:00）→ 昨天收盘，今天数据还没出来
+            if now.hour < 9:
+                result = calendar.get_previous_trading_day(Market.CN, today)
+                logger.debug(f"凌晨时段，最近已收盘交易日: {result}")
+                return result
+            # 15:00-23:59 → 今天已收盘
             logger.debug(f"收盘后，最近已收盘交易日: {today}")
             return today
         
