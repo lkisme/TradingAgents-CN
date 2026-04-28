@@ -75,8 +75,10 @@ class EnhancedMongoDBCacheAdapter:
             reasons.append(f"起始不足（{earliest_date} > {one_year_ago}）")
         
         if not latest_valid:
+            # 兼容带时间戳的格式
+            latest_date_clean = latest_date.split(' ')[0] if ' ' in latest_date else latest_date
             gap_days = (datetime.strptime(latest_closed_day, '%Y-%m-%d') - 
-                       datetime.strptime(latest_date, '%Y-%m-%d')).days
+                       datetime.strptime(latest_date_clean, '%Y-%m-%d')).days
             reasons.append(f"有Gap（{gap_days}天，{latest_date} → {latest_closed_day}）")
         
         reason = ", ".join(reasons)
@@ -325,8 +327,10 @@ class EnhancedMongoDBCacheAdapter:
         
         # 收盘后 → 检查 Gap
         if latest_date < latest_closed_day:
+            # 兼容带时间戳的格式
+            latest_date_clean = latest_date.split(' ')[0] if ' ' in latest_date else latest_date
             gap_days = (datetime.strptime(latest_closed_day, '%Y-%m-%d') - 
-                       datetime.strptime(latest_date, '%Y-%m-%d')).days
+                       datetime.strptime(latest_date_clean, '%Y-%m-%d')).days
             
             if gap_days > 7:
                 # Gap > 7 天 → 全量获取
