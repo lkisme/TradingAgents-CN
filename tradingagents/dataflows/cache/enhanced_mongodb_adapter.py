@@ -36,23 +36,24 @@ class EnhancedMongoDBCacheAdapter:
         """
         用日期范围验证缓存完整性
         
+        🔥 改为直接从数据库统计，不再依赖 metadata
+        
         Args:
             symbol: 股票代码
         
         Returns:
-            (is_complete, reason, metadata): 完整性标记、原因、元数据
+            (is_complete, reason, stats): 完整性标记、原因、统计数据
         """
         
-        metadata = self.get_cache_metadata(symbol)
+        # 🔥 直接从数据库统计
+        stats = self.get_historical_data_stats(symbol)
         
-        if not metadata:
-            return False, "无缓存元数据", None
-        
-        earliest_date = metadata.get('earliest_date')
-        latest_date = metadata.get('latest_date')
+        earliest_date = stats.get('earliest_date')
+        latest_date = stats.get('latest_date')
+        total_records = stats.get('total_records', 0)
         
         if not earliest_date or not latest_date:
-            return False, "缺少日期范围", metadata
+            return False, "无数据或缺少日期范围", stats
         
         # === 计算判断基准 ===
         one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
@@ -64,27 +65,27 @@ class EnhancedMongoDBCacheAdapter:
         
         if earliest_valid and latest_valid:
             logger.info(f"✅ [{symbol}] 缓存完整: "
-                       f"earliest={earliest_date} ≤ {one_year_ago}, "
-                       f"latest={latest_date} ≥ {latest_closed_day}")
-            return True, "缓存完整", metadata
+                       f"earliest={earliest_date} <= {one_year_ago}, "
+                       f"latest={latest_date} >= {latest_closed_day}, "
+                       f"records={total_records}")
+            return True, "缓存完整", stats
         
         # === 分析不完整原因 ===
         reasons = []
         
         if not earliest_valid:
-            reasons.append(f"起始不足（{earliest_date} > {one_year_ago}）")
+            reasons.append(f"起始不足({earliest_date} > {one_year_ago})")
         
         if not latest_valid:
-            # 兼容带时间戳的格式
             latest_date_clean = latest_date.split(' ')[0] if ' ' in latest_date else latest_date
             gap_days = (datetime.strptime(latest_closed_day, '%Y-%m-%d') - 
                        datetime.strptime(latest_date_clean, '%Y-%m-%d')).days
-            reasons.append(f"有Gap（{gap_days}天，{latest_date} → {latest_closed_day}）")
+            reasons.append(f"有Gap({gap_days}天, {latest_date} -> {latest_closed_day})")
         
-        reason = ", ".join(reasons)
+        reason = "; ".join(reasons)
         logger.warning(f"⚠️ [{symbol}] 缓存不完整: {reason}")
         
-        return False, reason, metadata
+        return False, reason, stats
     
     def get_cache_metadata(self, symbol: str) -> Optional[dict]:
         """
@@ -279,13 +280,15 @@ class EnhancedMongoDBCacheAdapter:
         except Exception as e:
             logger.error(f"批量写入历史数据失败: {e}")
     
-    def get_fetch_strategy(self, symbol: str, metadata: Optional[dict]) -> Tuple[str, str, str]:
+    def get_fetch_strategy(self, symbol: str, stats: Optional[dict]) -> Tuple[str, str, str]:
         """
         确定数据获取策略
         
+        🔥 改为接收数据库统计结果(stats)，不再依赖 metadata
+        
         Args:
             symbol: 股票代码
-            metadata: 缓存元数据
+            stats: 数据库统计数据(earliest_date, latest_date, total_records)
         
         Returns:
             (strategy, fetch_start, fetch_end): 
@@ -296,16 +299,16 @@ class EnhancedMongoDBCacheAdapter:
         one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
         latest_closed_day = TradingDayUtils.get_latest_closed_trading_day()
         
-        # 无缓存 → 全量获取
-        if not metadata:
-            logger.info(f"🔄 [{symbol}] 无缓存，全量获取")
+        # 无数据 -> 全量获取
+        if not stats:
+            logger.info(f"🔄 [{symbol}] 无数据统计，全量获取")
             return 'full', one_year_ago, latest_closed_day
         
-        earliest_date = metadata.get('earliest_date')
-        latest_date = metadata.get('latest_date')
+        earliest_date = stats.get('earliest_date')
+        latest_date = stats.get('latest_date')
         
         if not earliest_date or not latest_date:
-            logger.info(f"🔄 [{symbol}] 元数据不完整，全量获取")
+            logger.info(f"🔄 [{symbol}] 数据不完整，全量获取")
             return 'full', one_year_ago, latest_closed_day
         
         # 起始不足 → 全量获取

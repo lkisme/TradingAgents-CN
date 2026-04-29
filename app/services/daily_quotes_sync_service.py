@@ -591,35 +591,43 @@ class DailyQuotesSyncService:
                 if i % 50 == 0:
                     logger.info(f"进度: [{i}/{len(stock_pool)}]")
                 
-                # 检查是否已同步（跳过当天已同步的）
-                metadata = adapter.get_cache_metadata(symbol)
-                if metadata and metadata.get('last_sync_date') == today:
+                # 🔥 [可观测性] 直接从数据库统计判断，不再依赖 metadata
+                actual_stats = adapter.get_historical_data_stats(symbol)
+                actual_latest = actual_stats.get('latest_date')
+                actual_earliest = actual_stats.get('earliest_date')
+                actual_total = actual_stats.get('total_records', 0)
+                
+                # 条件1：数据已是今天 -> 跳过
+                if actual_latest == today:
+                    logger.info(f"⏭️ [{symbol}] 数据已是今天({today})，跳过")
                     results['skipped'] += 1
                     continue
                 
-                # 检查缓存是否完整（跳过已完整的）
-                is_complete, reason, _ = adapter.validate_cache_by_date_range(symbol)
+                # 条件2：缓存完整（earliest <= 一年前 且 latest >= 最近已收盘）
+                is_complete = (
+                    actual_earliest and actual_latest and
+                    str(actual_earliest) <= str(one_year_ago) and
+                    str(actual_latest) >= str(latest_closed)
+                )
                 if is_complete:
+                    logger.info(f"⏭️ [{symbol}] 缓存完整({actual_earliest}~{actual_latest})，跳过")
                     results['skipped'] += 1
-                    logger.debug(f"⏭️ [{symbol}] 缓存完整，跳过")
                     continue
                 
-                # 确定获取策略
-                strategy, fetch_start, fetch_end = adapter.get_fetch_strategy(symbol, metadata)
+                # 条件3：获取策略为 skip
+                strategy, fetch_start, fetch_end = adapter.get_fetch_strategy(symbol, actual_stats)
                 
                 if strategy == 'skip':
+                    logger.info(f"⏭️ [{symbol}] 获取策略=skip，跳过")
                     results['skipped'] += 1
                     continue
                 
                 # 🔥 计算 Gap 天数（用于日志记录）
                 gap_days = 0
-                if metadata and metadata.get('latest_date'):
+                if actual_latest:
                     from datetime import datetime as dt
-                    # 兼容带时间戳的格式
-                    latest_date_raw = metadata['latest_date']
-                    latest_date_clean = latest_date_raw.split(' ')[0] if ' ' in latest_date_raw else latest_date_raw
                     gap_days = (dt.strptime(latest_closed, '%Y-%m-%d') - 
-                               dt.strptime(latest_date_clean, '%Y-%m-%d')).days
+                               dt.strptime(actual_latest, '%Y-%m-%d')).days
                 
                 # 🔥 策略调整：无论 Gap 多大，都使用实时行情 API 补充当天数据
                 await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
@@ -699,15 +707,8 @@ class DailyQuotesSyncService:
                         str(actual_latest) >= str(latest_closed)
                     )
                     
-                    # 更新元数据（使用实际统计）
-                    adapter.update_cache_metadata(
-                        symbol=symbol,
-                        earliest_date=actual_earliest,
-                        latest_date=actual_latest,
-                        total_records=actual_total,
-                        is_complete=is_complete,
-                        data_source=data_source  # ← 使用本次同步的数据源
-                    )
+                    # 🔥 不再维护 metadata，直接依赖数据库统计
+                    # adapter.update_cache_metadata(...) 已删除
                     
                     results['success'] += 1
                     logger.info(f"✅ [{symbol}] 同步成功，{len(data)} 条")
@@ -814,16 +815,8 @@ async def manual_sync_historical_data(
         if data and not data.empty:
             adapter.save_historical_data_bulk(symbol, data, data_source)
             
-            # 更新元数据
-            actual_stats = adapter.get_historical_data_stats(symbol)
-            adapter.update_cache_metadata(
-                symbol=symbol,
-                earliest_date=actual_stats.get('earliest_date'),
-                latest_date=actual_stats.get('latest_date'),
-                total_records=actual_stats.get('total_records', 0),
-                is_complete=True,
-                data_source=data_source
-            )
+            # 🔥 不再维护 metadata，直接依赖数据库统计
+            # adapter.update_cache_metadata(...) 已删除
             
             results['success'] += 1
             logger.info(f"✅ [{symbol}] 手动补充成功，{len(data)} 条")

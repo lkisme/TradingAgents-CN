@@ -74,30 +74,31 @@ class ResilientChinaStockProviderEnhanced:
         # === 第一优先级：验证缓存完整性 ===
         logger.info(f"📊 [MongoDB优先] 检查缓存: {symbol}")
         
-        is_complete, reason, metadata = adapter.validate_cache_by_date_range(symbol)
+        is_complete, reason, stats = adapter.validate_cache_by_date_range(symbol)
         
         if is_complete:
-            # 缓存完整 → 直接返回
-            earliest = metadata['earliest_date']
-            latest = metadata['latest_date']
+            # 缓存完整 -> 直接返回
+            earliest = stats['earliest_date']
+            latest = stats['latest_date']
             cached_data = adapter.query_historical_data(symbol, earliest, latest)
             if not cached_data.empty:
-                logger.info(f"✅ [{symbol}] 缓存命中，返回 {len(cached_data)} 条")
+                logger.info(f"✅ [{symbol}] 缓存命中且完整({earliest}~{latest})，返回 {len(cached_data)} 条")
                 self._current_source = 'mongodb_cache'
                 return cached_data
         
-        # === 缓存不完整 → 确定获取策略 ===
-        strategy, fetch_start, fetch_end = adapter.get_fetch_strategy(symbol, metadata)
+        # === 缓存不完整 -> 确定获取策略 ===
+        logger.warning(f"⚠️ [{symbol}] 缓存不完整: {reason}")
+        strategy, fetch_start, fetch_end = adapter.get_fetch_strategy(symbol, stats)
         
         if strategy == 'skip':
-            # 理论上不会到这里（is_complete=True 已处理）
-            raise DataFetchError(f"{symbol} 缓存验证逻辑错误")
+            logger.info(f"⏭️ [{symbol}] 获取策略=skip，无数据")
+            raise DataFetchError(f"{symbol} 无可用数据")
         
         # === 获取现有缓存数据（用于合并）===
         existing_data = None
-        if metadata and metadata.get('earliest_date'):
+        if stats and stats.get('earliest_date'):
             existing_data = adapter.query_historical_data(
-                symbol, metadata['earliest_date'], metadata['latest_date']
+                symbol, stats['earliest_date'], stats['latest_date']
             )
         
         # === 第二优先级：AKShare API ===
@@ -111,8 +112,7 @@ class ResilientChinaStockProviderEnhanced:
                 logger.info(f"✅ [AKShare] 获取成功: {symbol}, {len(data)} 条")
                 # 写入缓存
                 adapter.save_historical_data_bulk(symbol, data, 'akshare')
-                # 更新元数据
-                self._update_metadata(adapter, symbol, data, existing_data)
+                # 🔥 不再维护 metadata
                 self._current_source = 'akshare'
                 # 合并数据（增量场景）
                 if existing_data and strategy in ['incremental', 'gap']:
@@ -133,8 +133,7 @@ class ResilientChinaStockProviderEnhanced:
                 logger.info(f"✅ [BaoStock] 获取成功: {symbol}, {len(data)} 条")
                 # 写入缓存
                 adapter.save_historical_data_bulk(symbol, data, 'baostock')
-                # 更新元数据
-                self._update_metadata(adapter, symbol, data, existing_data)
+                # 🔥 不再维护 metadata
                 self._current_source = 'baostock'
                 # 合并数据
                 if existing_data and strategy in ['incremental', 'gap']:
@@ -149,40 +148,7 @@ class ResilientChinaStockProviderEnhanced:
         logger.error(f"❌ {error_msg}")
         raise DataFetchError(error_msg)
     
-    def _update_metadata(self, adapter, symbol: str, new_data: pd.DataFrame, existing_data: Optional[pd.DataFrame]):
-        """
-        更新缓存元数据
-        
-        Args:
-            adapter: 缓存适配器
-            symbol: 股票代码
-            new_data: 新数据
-            existing_data: 现有数据
-        """
-        
-        if existing_data and not existing_data.empty:
-            merged = self._merge_data(existing_data, new_data)
-        else:
-            merged = new_data
-        
-        # ✅ 兼容字段名差异（BaoStock 用 'date', AKShare 用 'trade_date'）
-        date_field = 'trade_date' if 'trade_date' in merged.columns else 'date'
-        earliest = merged[date_field].min()
-        latest = merged[date_field].max()
-        
-        # 验证完整性
-        one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
-        latest_closed = TradingDayUtils.get_latest_closed_trading_day()
-        is_complete = earliest <= one_year_ago and latest >= latest_closed
-        
-        adapter.update_cache_metadata(
-            symbol=symbol,
-            earliest_date=earliest,
-            latest_date=latest,
-            total_records=len(merged),
-            is_complete=is_complete,
-            data_source=self._current_source or 'akshare'
-        )
+    # 🔥 _update_metadata 方法已删除，不再维护 metadata
     
     def _merge_data(self, existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
         """

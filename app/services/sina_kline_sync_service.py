@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from app.core.database import get_mongo_db
+from tradingagents.utils.trading_day_utils import TradingDayUtils
 
 logger = logging.getLogger(__name__)
 
@@ -194,13 +195,31 @@ class SinaKlineSyncService:
             # 2. 过滤出不完整的股票
             incomplete_stocks = []
             for symbol in stock_pool:
-                # 查询缓存元数据
-                meta = await self.db.cache_metadata.find_one(
-                    {"symbol": symbol, "collection": "stock_daily_quotes"}
-                )
+                # 🔥 直接从数据库统计判断，不再依赖 metadata
+                stats = await self.db.stock_daily_quotes.aggregate([
+                    {"$match": {"code": symbol}},
+                    {"$group": {
+                        "_id": None,
+                        "earliest_date": {"$min": "$trade_date"},
+                        "latest_date": {"$max": "$trade_date"},
+                        "total_records": {"$sum": 1}
+                    }}
+                ]).to_list(None)
                 
-                # 不完整的情况：无元数据 或 is_complete=False
-                if not meta or not meta.get("is_complete", False):
+                if not stats:
+                    incomplete_stocks.append(symbol)
+                    continue
+                
+                # 判断完整性
+                earliest = stats[0].get("earliest_date")
+                latest = stats[0].get("latest_date")
+                
+                # 不完整的情况：earliest > 一年前 或 latest < 最近已收盘日
+                one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
+                latest_closed = TradingDayUtils.get_latest_closed_trading_day()
+                
+                if not earliest or not latest or earliest > one_year_ago or latest < latest_closed:
+                    logger.info(f"⚠️ [{symbol}] 不完整: {earliest}~{latest}")
                     incomplete_stocks.append(symbol)
             
             logger.info(f"📋 查询到 {len(incomplete_stocks)} 只不完整股票")
@@ -258,7 +277,8 @@ class SinaKlineSyncService:
                     }
 
             # 5. 更新缓存元数据（异步）
-            await self._update_metadata(symbol, sina_data)
+            # 🔥 不再维护 metadata
+            # await self._update_metadata(symbol, sina_data)
 
             # 6. 返回结果
             return {
@@ -275,61 +295,7 @@ class SinaKlineSyncService:
                 "error": str(e)[:50],
                 "status": "failed"
             }
-
-    async def _update_metadata(self, symbol: str, data: List[Dict]):
-        """
-        更新缓存元数据（异步）
-
-        Args:
-            symbol: 股票代码
-            data: K 线数据列表
-        """
-        if not data:
-            return
-
-        try:
-            # 获取日期范围
-            dates = sorted([d["trade_date"] for d in data if d["trade_date"]])
-            if not dates:
-                return
-
-            earliest_date = dates[0]
-            latest_date = dates[-1]
-
-            # 使用 TradingDayUtils 检查完整性
-            from tradingagents.utils.trading_day_utils import TradingDayUtils
-            one_year_ago = TradingDayUtils.get_one_year_ago_trading_day()
-            latest_closed = TradingDayUtils.get_latest_closed_trading_day()
-
-            is_complete = (
-                earliest_date <= one_year_ago and
-                latest_date >= latest_closed
-            )
-
-            # 统计总记录数（异步）
-            total_records = await self.db.stock_daily_quotes.count_documents({"code": symbol})
-
-            # 更新或插入元数据（异步）
-            await self.db.cache_metadata.update_one(
-                {"symbol": symbol, "collection": "stock_daily_quotes"},
-                {"$set": {
-                    "earliest_date": earliest_date,
-                    "latest_date": latest_date,
-                    "total_records": total_records,
-                    "is_complete": is_complete,
-                    "data_source": "sina_kline",
-                    "last_sync_date": datetime.utcnow().strftime('%Y-%m-%d'),
-                    "updated_at": datetime.utcnow()
-                }},
-                upsert=True
-            )
-
-            logger.debug(f"📊 {symbol} 元数据更新: earliest={earliest_date}, latest={latest_date}, complete={is_complete}")
-
-        except Exception as e:
-            logger.warning(f"⚠️ {symbol} 元数据更新失败: {e}")
-
-
+    # 🔥 _update_metadata 方法已删除，不再维护 metadata
 # 全局服务实例
 _sina_kline_sync_service: Optional[SinaKlineSyncService] = None
 
