@@ -101,6 +101,20 @@ class ResilientChinaStockProviderEnhanced:
                 symbol, stats['earliest_date'], stats['latest_date']
             )
         
+        # 🔥 [关键修复] 当 strategy='incremental' 且 Gap<=1 天时，先返回现有缓存
+        # 原因：只缺今天的数据，实时行情可在后续通过其他方式获取
+        # 避免 AKShare/BaoStock 失败导致整个任务失败
+        if strategy == 'incremental' and existing_data is not None and not existing_data.empty and len(existing_data) >= 100:
+            from datetime import datetime as dt
+            latest = stats.get('latest_date', '')
+            latest_closed = TradingDayUtils.get_latest_closed_trading_day()
+            gap_days = (dt.strptime(latest_closed, '%Y-%m-%d') - dt.strptime(latest, '%Y-%m-%d')).days if latest else 0
+            
+            if gap_days <= 1:
+                logger.info(f"✅ [{symbol}] Gap={gap_days}天，先返回缓存({len(existing_data)}条)，今天数据可后续补充")
+                self._current_source = 'mongodb_cache_partial'
+                return existing_data
+        
         # === 第二优先级：AKShare API ===
         logger.info(f"🔄 [AKShare] 尝试获取: {symbol} ({fetch_start} ~ {fetch_end})")
         
