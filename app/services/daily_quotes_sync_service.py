@@ -33,7 +33,7 @@ class DailyQuotesSyncService:
         self.retry_base_delay = 1.0  # 基础延迟（秒）
         self.request_interval_min = 0.3  # 最小请求间隔（秒）
         self.request_interval_max = 0.6  # 最大请求间隔（秒）
-        self.xueqiu_mcp_url = "http://172.27.173.169:3000/mcp"  # xueqiu-mcp服务地址（宿主机IP）
+        self.xueqiu_mcp_url = "http://172.27.173.169:3002/mcp"  # xueqiu-mcp服务地址（宿主机IP）
         # 需要手动补充历史数据的股票列表
         self.need_manual_sync: List[str] = []
     
