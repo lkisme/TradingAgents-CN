@@ -10,6 +10,7 @@ import pymongo
 import logging
 
 from tradingagents.utils.trading_day_utils import TradingDayUtils
+from tradingagents.utils.stock_info_utils import validate_new_stock_cache, get_listing_date
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,15 @@ class EnhancedMongoDBCacheAdapter:
         latest_closed_day = TradingDayUtils.get_latest_closed_trading_day()
         
         # === 判断完整性 ===
-        earliest_valid = earliest_date <= one_year_ago
+        
+        # 新股验证：如果 earliest_date > one_year_ago，需要通过上市日期验证
+        if earliest_date <= one_year_ago:
+            # 老股，数据足够久
+            earliest_valid = True
+        else:
+            # 新股，通过上市日期验证
+            earliest_valid = validate_new_stock_cache(symbol, earliest_date)
+        
         latest_valid = latest_date >= latest_closed_day
         
         if earliest_valid and latest_valid:
@@ -74,7 +83,12 @@ class EnhancedMongoDBCacheAdapter:
         reasons = []
         
         if not earliest_valid:
-            reasons.append(f"起始不足({earliest_date} > {one_year_ago})")
+            # 新股检查上市日期
+            listing_date = get_listing_date(symbol)
+            if listing_date:
+                reasons.append(f"起始不足（earliest={earliest_date}, listing={listing_date}）")
+            else:
+                reasons.append(f"起始不足（{earliest_date} > {one_year_ago}）")
         
         if not latest_valid:
             from tradingagents.utils.date_utils import parse_trade_date
