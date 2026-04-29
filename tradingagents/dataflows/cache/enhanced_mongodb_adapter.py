@@ -77,9 +77,10 @@ class EnhancedMongoDBCacheAdapter:
             reasons.append(f"起始不足({earliest_date} > {one_year_ago})")
         
         if not latest_valid:
-            latest_date_clean = latest_date.split(' ')[0] if ' ' in latest_date else latest_date
-            gap_days = (datetime.strptime(latest_closed_day, '%Y-%m-%d') - 
-                       datetime.strptime(latest_date_clean, '%Y-%m-%d')).days
+            from tradingagents.utils.date_utils import parse_trade_date
+            latest_dt = parse_trade_date(latest_closed_day)
+            actual_dt = parse_trade_date(latest_date)
+            gap_days = (latest_dt - actual_dt).days if latest_dt and actual_dt else 0
             reasons.append(f"有Gap({gap_days}天, {latest_date} -> {latest_closed_day})")
         
         reason = "; ".join(reasons)
@@ -330,10 +331,10 @@ class EnhancedMongoDBCacheAdapter:
         
         # 收盘后 → 检查 Gap
         if latest_date < latest_closed_day:
-            # 兼容带时间戳的格式
-            latest_date_clean = latest_date.split(' ')[0] if ' ' in latest_date else latest_date
-            gap_days = (datetime.strptime(latest_closed_day, '%Y-%m-%d') - 
-                       datetime.strptime(latest_date_clean, '%Y-%m-%d')).days
+            from tradingagents.utils.date_utils import parse_trade_date
+            latest_dt = parse_trade_date(latest_closed_day)
+            actual_dt = parse_trade_date(latest_date)
+            gap_days = (latest_dt - actual_dt).days if latest_dt and actual_dt else 0
             
             if gap_days > 7:
                 # Gap > 7 天 → 全量获取

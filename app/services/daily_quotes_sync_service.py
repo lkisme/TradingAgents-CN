@@ -625,9 +625,11 @@ class DailyQuotesSyncService:
                 # 🔥 计算 Gap 天数（用于日志记录）
                 gap_days = 0
                 if actual_latest:
-                    from datetime import datetime as dt
-                    gap_days = (dt.strptime(latest_closed, '%Y-%m-%d') - 
-                               dt.strptime(actual_latest, '%Y-%m-%d')).days
+                    from tradingagents.utils.date_utils import parse_trade_date
+                    latest_dt = parse_trade_date(latest_closed)
+                    actual_dt = parse_trade_date(actual_latest)
+                    if latest_dt and actual_dt:
+                        gap_days = (latest_dt - actual_dt).days
                 
                 # 🔥 策略调整：无论 Gap 多大，都使用实时行情 API 补充当天数据
                 await asyncio.sleep(random.uniform(self.request_interval_min, self.request_interval_max))
