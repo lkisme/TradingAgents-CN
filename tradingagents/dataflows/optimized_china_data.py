@@ -880,7 +880,14 @@ class OptimizedChinaDataProvider:
 
             if akshare_provider.connected:
                 # AKShare的get_financial_data是异步方法，需要使用asyncio运行
-                loop = asyncio.get_event_loop()
+                # 在线程池中get_event_loop()会失败，需要创建新的事件循环
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_closed():
+                        raise RuntimeError("loop is closed")
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                 financial_data = loop.run_until_complete(akshare_provider.get_financial_data(symbol))
 
                 if financial_data and any(not v.empty if hasattr(v, 'empty') else bool(v) for v in financial_data.values()):
@@ -915,7 +922,13 @@ class OptimizedChinaDataProvider:
                 return None
 
             # 获取财务数据（异步方法）
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    raise RuntimeError("loop is closed")
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             financial_data = loop.run_until_complete(provider.get_financial_data(symbol))
             if not financial_data:
                 logger.debug(f"未获取到{symbol}的财务数据")
