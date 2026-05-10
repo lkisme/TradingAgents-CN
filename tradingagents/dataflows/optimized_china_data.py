@@ -2308,7 +2308,7 @@ def _add_financial_cache_methods():
             return cached_data
 
     def _cache_raw_financial_data(self, symbol: str, financial_data: dict, stock_info: dict):
-        """将原始财务数据缓存到数据库"""
+        """将原始财务数据缓存到数据库，同时写入 stock_financial_data 持久化集合"""
         try:
             from tradingagents.config.runtime_settings import use_app_cache_enabled
             if not use_app_cache_enabled(False):
@@ -2322,8 +2322,6 @@ def _add_financial_cache_methods():
                 return
 
             db = client.get_database('tradingagents')
-            collection = db.financial_data_cache
-
             from datetime import datetime
 
             # 将DataFrame转换为可序列化的格式
@@ -2334,6 +2332,7 @@ def _add_financial_cache_methods():
                 else:
                     serializable_data[key] = value
 
+            # 1. 写入 financial_data_cache（原始数据临时缓存）
             cache_doc = {
                 'symbol': symbol,
                 'cache_type': 'raw_financial_data',
@@ -2341,15 +2340,98 @@ def _add_financial_cache_methods():
                 'stock_info': stock_info,
                 'updated_at': datetime.now()
             }
-
-            # 使用upsert更新或插入
-            collection.replace_one(
+            db.financial_data_cache.replace_one(
                 {'symbol': symbol, 'cache_type': 'raw_financial_data'},
                 cache_doc,
                 upsert=True
             )
+            logger.info(f"✅ [财务缓存] {symbol}原始财务数据已缓存到 financial_data_cache")
 
-            logger.info(f"✅ [财务缓存] {symbol}原始财务数据已缓存到数据库")
+            # 2. 同时写入 stock_financial_data（标准化持久化集合）
+            try:
+                code6 = str(symbol).zfill(6)
+                main_indicators = serializable_data.get('main_indicators', [])
+                if not main_indicators:
+                    logger.debug(f"📊 [财务缓存] {symbol} main_indicators 为空，跳过写入 stock_financial_data")
+                    return
+
+                # 取最新一期（列表末尾，按时间升序）
+                latest = main_indicators[-1] if isinstance(main_indicators, list) else None
+                if not latest:
+                    return
+
+                def _safe_float_val(v):
+                    if v is None or v is False or str(v) in ('nan', '--', ''):
+                        return None
+                    try:
+                        if isinstance(v, str):
+                            v = v.replace(',', '').replace('%', '')
+                            if '亿' in v:
+                                return float(v.replace('亿', '')) * 10000
+                            elif '万' in v:
+                                return float(v.replace('万', ''))
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return None
+
+                # 标准化报告期 YYYY-MM-DD -> YYYYMMDD
+                raw_period = str(latest.get('报告期', ''))
+                report_period = raw_period.replace('-', '')
+
+                # 计算 TTM 营业收入和净利润
+                ttm_revenue = None
+                ttm_net_profit = None
+                try:
+                    import pandas as pd
+                    from scripts.sync_financial_data import _calculate_ttm_metric
+                    df_indicators = pd.DataFrame(main_indicators)
+                    if '报告期' in df_indicators.columns:
+                        if '营业总收入' in df_indicators.columns:
+                            ttm_revenue = _calculate_ttm_metric(df_indicators, '营业总收入')
+                        if '净利润' in df_indicators.columns:
+                            ttm_net_profit = _calculate_ttm_metric(df_indicators, '净利润')
+                except Exception as e:
+                    logger.debug(f"📊 [财务缓存] TTM计算失败: {e}")
+
+                std_doc = {
+                    "code": code6,
+                    "symbol": code6,
+                    "report_period": report_period,
+                    "data_source": "akshare",
+                    "updated_at": datetime.utcnow(),
+                    "roe": _safe_float_val(latest.get('净资产收益率')),
+                    "roa": None,
+                    "gross_margin": None,
+                    "netprofit_margin": _safe_float_val(latest.get('销售净利率')),
+                    "revenue": _safe_float_val(latest.get('营业总收入')),
+                    "revenue_ttm": ttm_revenue,
+                    "net_profit": _safe_float_val(latest.get('净利润')),
+                    "net_profit_ttm": ttm_net_profit,
+                    "total_assets": None,
+                    "total_hldr_eqy_exc_min_int": None,
+                    "basic_eps": _safe_float_val(latest.get('基本每股收益')),
+                    "bps": _safe_float_val(latest.get('每股净资产')),
+                    "debt_to_assets": _safe_float_val(latest.get('资产负债率')),
+                    "current_ratio": _safe_float_val(latest.get('流动比率')),
+                    "total_asset_turnover": None,
+                }
+
+                # 补充股本数据（如果 stock_info 有）
+                if stock_info:
+                    if stock_info.get('total_share'):
+                        std_doc['total_share'] = stock_info['total_share']
+                    if stock_info.get('float_share'):
+                        std_doc['float_share'] = stock_info['float_share']
+
+                db.stock_financial_data.update_one(
+                    {"code": code6, "report_period": report_period},
+                    {"$set": std_doc},
+                    upsert=True
+                )
+                logger.info(f"✅ [财务缓存] {symbol}标准化财务数据已写入 stock_financial_data (报告期: {report_period})")
+
+            except Exception as e:
+                logger.warning(f"⚠️ [财务缓存] 写入 stock_financial_data 失败: {e}")
 
         except Exception as e:
             logger.debug(f"📊 [财务缓存] 缓存{symbol}原始财务数据失败: {e}")
