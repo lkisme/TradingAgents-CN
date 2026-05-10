@@ -218,30 +218,8 @@ class OptimizedChinaDataProvider:
                     # 将财务数据转换为基本面分析格式
                     return self._format_financial_data_to_fundamentals(financial_data, symbol)
 
-        # 2. 检查文件缓存（除非强制刷新）
-        if not force_refresh:
-            # 查找基本面数据缓存
-            for metadata_file in self.cache.metadata_dir.glob(f"*_meta.json"):
-                try:
-                    import json
-                    with open(metadata_file, 'r', encoding='utf-8') as f:
-                        metadata = json.load(f)
-
-                    if (metadata.get('symbol') == symbol and
-                        metadata.get('data_type') == 'fundamentals' and
-                        metadata.get('market_type') == 'china'):
-
-                        cache_key = metadata_file.stem.replace('_meta', '')
-                        if self.cache.is_cache_valid(cache_key, symbol=symbol, data_type='fundamentals'):
-                            cached_data = self.cache.load_stock_data(cache_key)
-                            if cached_data:
-                                logger.info(f"⚡ [数据来源: 文件缓存] 从缓存加载A股基本面数据: {symbol}")
-                                return cached_data
-                except Exception:
-                    continue
-
-        # 缓存未命中，生成基本面分析
-        logger.debug(f"🔍 [数据来源: 生成分析] 生成A股基本面分析: {symbol}")
+        # 2. 缓存未命中，生成基本面分析
+        logger.info(f"🔍 [数据来源: 生成分析] MongoDB无缓存，生成A股基本面分析: {symbol}")
 
         try:
             # 基本面分析只需要基础信息，不需要完整的历史交易数据
