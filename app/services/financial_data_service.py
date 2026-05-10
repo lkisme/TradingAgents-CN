@@ -438,38 +438,48 @@ class FinancialDataService:
         return self._generate_current_period()
     
     def _extract_akshare_indicators(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
-        """从AKShare数据中提取关键财务指标"""
+        """从AKShare数据中提取关键财务指标
+
+        注意：stock_financial_abstract_ths 返回竖式数据（每行是报告期），按时间升序排列
+        """
         indicators = {}
 
-        # 从主要财务指标中提取
+        # 从主要财务指标中提取（使用同花顺接口 stock_financial_abstract_ths）
         if 'main_indicators' in financial_data and financial_data['main_indicators']:
-            main_data = financial_data['main_indicators'][0] if financial_data['main_indicators'] else {}
+            main_data_list = financial_data['main_indicators']
+            # 取最新一期（最后一行，数据按时间升序排列）
+            latest = main_data_list[-1] if main_data_list else {}
+
+            # 字段名匹配 stock_financial_abstract_ths
             indicators.update({
-                "revenue": self._safe_float(main_data.get('营业收入')),
-                "net_income": self._safe_float(main_data.get('净利润')),
-                "total_assets": self._safe_float(main_data.get('总资产')),
-                "total_equity": self._safe_float(main_data.get('股东权益合计')),
+                "revenue": self._safe_float(latest.get('营业总收入')),
+                "net_income": self._safe_float(latest.get('净利润')),
+                "bps": self._safe_float(latest.get('每股净资产')),
+                "basic_eps": self._safe_float(latest.get('基本每股收益')),
             })
 
-            # 🔥 新增：提取 ROE（净资产收益率）
-            roe = main_data.get('净资产收益率(ROE)') or main_data.get('净资产收益率')
-            if roe is not None:
+            # 提取 ROE（净资产收益率）- 注意值可能为 False
+            roe = latest.get('净资产收益率')
+            if roe is not None and roe is not False:
                 indicators["roe"] = self._safe_float(roe)
 
-            # 🔥 新增：提取负债率（资产负债率）
-            debt_ratio = main_data.get('资产负债率') or main_data.get('负债率')
-            if debt_ratio is not None:
+            # 提取负债率（资产负债率）- 注意值可能为 False
+            debt_ratio = latest.get('资产负债率')
+            if debt_ratio is not None and debt_ratio is not False:
                 indicators["debt_to_assets"] = self._safe_float(debt_ratio)
 
         # 从资产负债表中提取
         if 'balance_sheet' in financial_data and financial_data['balance_sheet']:
-            balance_data = financial_data['balance_sheet'][0] if financial_data['balance_sheet'] else {}
+            balance_data_list = financial_data['balance_sheet']
+            # 取最新一期（最后一行）
+            balance_data = balance_data_list[-1] if balance_data_list else {}
             indicators.update({
                 "total_liab": self._safe_float(balance_data.get('负债合计')),
                 "cash_and_equivalents": self._safe_float(balance_data.get('货币资金')),
+                "total_assets": self._safe_float(balance_data.get('资产总计')),
             })
 
-            # 🔥 如果主要指标中没有负债率，从资产负债表计算
+            # 如果主要指标中没有负债率，从资产负债表计算
             if "debt_to_assets" not in indicators:
                 total_liab = indicators.get("total_liab")
                 total_assets = indicators.get("total_assets")
@@ -502,12 +512,18 @@ class FinancialDataService:
     
     def _safe_float(self, value) -> Optional[float]:
         """安全转换为浮点数"""
-        if value is None:
+        # 处理 None 和 False（AKShare 缺失数据用 False 表示）
+        if value is None or value is False:
             return None
         try:
             if isinstance(value, str):
-                # 移除可能的单位和格式化字符
-                value = value.replace(',', '').replace('万', '').replace('亿', '')
+                # 移除逗号和百分号
+                value = value.replace(',', '').replace('%', '')
+                # 处理带单位的数值（如"145.23亿"、"2.83%"）
+                if '亿' in value:
+                    return float(value.replace('亿', '')) * 10000  # 亿转万
+                elif '万' in value:
+                    return float(value.replace('万', ''))  # 已经是万为单位，直接返回
             return float(value)
         except (ValueError, TypeError):
             return None

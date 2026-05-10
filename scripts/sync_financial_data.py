@@ -53,11 +53,11 @@ async def sync_single_stock_financial_data(
     try:
         logger.info(f"🔄 同步 {code6} 的财务数据...")
         
-        # 1. 获取财务指标数据
+        # 1. 获取财务指标数据（改用同花顺接口，返回竖式数据）
         import akshare as ak
 
         def fetch_financial_indicator():
-            return ak.stock_financial_analysis_indicator(symbol=code6)
+            return ak.stock_financial_abstract_ths(symbol=code6, indicator='按报告期')
 
         try:
             df = await asyncio.to_thread(fetch_financial_indicator)
@@ -66,13 +66,13 @@ async def sync_single_stock_financial_data(
                 logger.warning(f"⚠️  {code6} 未获取到财务指标数据")
                 return False
 
-            # 获取最新一期数据
+            # 获取最新一期数据（数据按时间升序，最后一行是最新）
             latest = df.iloc[-1].to_dict()
 
-            logger.info(f"   获取到 {len(df)} 期财务数据，最新期: {latest.get('报告期', 'N/A')}")
+            logger.info(f"   获取到 {len(df)} 期财务数据（同花顺），最新期: {latest.get('报告期', 'N/A')}")
 
             # 计算 TTM（最近12个月）营业收入和净利润
-            ttm_revenue = _calculate_ttm_metric(df, '营业收入')
+            ttm_revenue = _calculate_ttm_metric(df, '营业总收入')
             ttm_net_profit = _calculate_ttm_metric(df, '净利润')
 
             if ttm_revenue:
@@ -84,27 +84,31 @@ async def sync_single_stock_financial_data(
             logger.error(f"❌ {code6} 获取财务指标失败: {e}")
             return False
 
-        # 2. 解析财务数据
+        # 2. 解析财务数据（字段名适配 stock_financial_abstract_ths）
+        # 标准化报告期格式：YYYY-MM-DD -> YYYYMMDD
+        raw_report_period = latest.get('报告期', '')
+        normalized_report_period = raw_report_period.replace('-', '')
+
         financial_data = {
             "code": code6,
             "symbol": code6,
-            "report_period": latest.get('报告期', ''),
+            "report_period": normalized_report_period,
             "data_source": "akshare",
             "updated_at": datetime.utcnow(),
 
             # 盈利能力指标
             "roe": _safe_float(latest.get('净资产收益率')),  # ROE
-            "roa": _safe_float(latest.get('总资产净利率')),  # ROA
-            "gross_margin": _safe_float(latest.get('销售毛利率')),  # 毛利率
+            "roa": None,  # stock_financial_abstract_ths 不提供
+            "gross_margin": None,  # stock_financial_abstract_ths 不提供
             "netprofit_margin": _safe_float(latest.get('销售净利率')),  # 净利率
 
             # 财务数据（万元）
-            "revenue": _safe_float(latest.get('营业收入')),  # 营业收入（单期）
+            "revenue": _safe_float(latest.get('营业总收入')),  # 营业收入（单期）
             "revenue_ttm": ttm_revenue,  # TTM营业收入（最近12个月）
             "net_profit": _safe_float(latest.get('净利润')),  # 净利润（单期）
             "net_profit_ttm": ttm_net_profit,  # TTM净利润（最近12个月）
-            "total_assets": _safe_float(latest.get('总资产')),  # 总资产
-            "total_hldr_eqy_exc_min_int": _safe_float(latest.get('股东权益合计')),  # 净资产
+            "total_assets": None,  # stock_financial_abstract_ths 不提供
+            "total_hldr_eqy_exc_min_int": None,  # stock_financial_abstract_ths 不提供
 
             # 每股指标
             "basic_eps": _safe_float(latest.get('基本每股收益')),  # 每股收益
@@ -115,7 +119,7 @@ async def sync_single_stock_financial_data(
             "current_ratio": _safe_float(latest.get('流动比率')),  # 流动比率
 
             # 运营能力指标
-            "total_asset_turnover": _safe_float(latest.get('总资产周转率')),  # 总资产周转率
+            "total_asset_turnover": None,  # stock_financial_abstract_ths 不提供
         }
         
         # 3. 获取股本数据
@@ -220,9 +224,18 @@ async def sync_single_stock_financial_data(
 
 def _safe_float(value) -> Optional[float]:
     """安全转换为浮点数"""
-    if value is None or value == '' or str(value) == 'nan' or value == '--':
+    # 处理 None、空值、nan、-- 以及 False（AKShare 缺失数据用 False 表示）
+    if value is None or value == '' or str(value) == 'nan' or value == '--' or value is False:
         return None
     try:
+        if isinstance(value, str):
+            # 移除逗号和百分号
+            value = value.replace(',', '').replace('%', '')
+            # 处理带单位的数值（如"145.23亿"、"2.83%"）
+            if '亿' in value:
+                return float(value.replace('亿', '')) * 10000  # 亿转万
+            elif '万' in value:
+                return float(value.replace('万', ''))  # 已经是万为单位
         return float(value)
     except (ValueError, TypeError):
         return None
@@ -263,8 +276,12 @@ def _calculate_ttm_metric(df, metric_name: str) -> Optional[float]:
         if latest_value is None:
             return None
 
+        # 标准化报告期格式（移除分隔符）
+        # stock_financial_abstract_ths 返回格式: YYYY-MM-DD，转换为 YYYYMMDD
+        normalized_period = latest_period.replace('-', '')
+
         # 判断最新期是否是年报（报告期以1231结尾）
-        if latest_period.endswith('1231'):
+        if normalized_period.endswith('1231'):
             # 年报，直接使用
             logger.debug(f"   使用年报{metric_name}作为TTM: {latest_value:.2f} 万元")
             return latest_value
@@ -272,17 +289,19 @@ def _calculate_ttm_metric(df, metric_name: str) -> Optional[float]:
         # 非年报，需要计算 TTM
         # 提取年份和月份
         try:
-            year = int(latest_period[:4])
-            month_day = latest_period[4:]
+            year = int(normalized_period[:4])
+            month_day = normalized_period[4:]
         except:
             return None
 
         # 查找最近的年报（上一年的1231）
         last_year = year - 1
-        last_annual_period = f"{last_year}1231"
+        last_annual_period_normalized = f"{last_year}1231"
+        last_same_period_normalized = f"{last_year}{month_day}"
 
-        # 查找去年同期
-        last_same_period = f"{last_year}{month_day}"
+        # 构建带分隔符的格式用于查找（stock_financial_abstract_ths 格式）
+        last_annual_period = f"{last_year}-12-31"
+        last_same_period = f"{last_year}-{month_day[:2]}-{month_day[2:]}"
 
         # 在 DataFrame 中查找
         last_annual_row = df_sorted[df_sorted['报告期'] == last_annual_period]

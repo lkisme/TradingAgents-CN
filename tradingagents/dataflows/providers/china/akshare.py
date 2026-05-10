@@ -1096,15 +1096,15 @@ class AKShareProvider(BaseStockDataProvider):
 
             financial_data = {}
 
-            # 1. 获取主要财务指标
+            # 1. 获取主要财务指标（改用同花顺接口，返回竖式数据）
             try:
                 def fetch_financial_abstract():
-                    return self.ak.stock_financial_abstract(symbol=code)
+                    return self.ak.stock_financial_abstract_ths(symbol=code, indicator='按报告期')
 
                 main_indicators = await asyncio.to_thread(fetch_financial_abstract)
                 if main_indicators is not None and not main_indicators.empty:
                     financial_data['main_indicators'] = main_indicators.to_dict('records')
-                    logger.debug(f"✅ {code}主要财务指标获取成功")
+                    logger.debug(f"✅ {code}主要财务指标获取成功（同花顺，{len(main_indicators)}期）")
             except Exception as e:
                 logger.debug(f"获取{code}主要财务指标失败: {e}")
 
