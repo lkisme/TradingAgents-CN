@@ -1343,7 +1343,10 @@ class OptimizedChinaDataProvider:
             return None
 
     def _parse_akshare_financial_data(self, financial_data: dict, stock_info: dict, price_value: float) -> dict:
-        """解析AKShare财务数据为指标"""
+        """解析AKShare财务数据为指标
+
+        注意：stock_financial_abstract_ths 返回竖式数据（每行是报告期，按时间升序排列）
+        """
         try:
             # 获取最新的财务数据
             balance_sheet = financial_data.get('balance_sheet', [])
@@ -1351,7 +1354,8 @@ class OptimizedChinaDataProvider:
             cash_flow = financial_data.get('cash_flow', [])
             main_indicators = financial_data.get('main_indicators')
 
-            # main_indicators 可能是 DataFrame 或 list（to_dict('records') 的结果）
+            # main_indicators 是 list 格式（stock_financial_abstract_ths 的 to_dict('records') 结果）
+            # 竖式数据：每行是一个报告期，按时间升序排列
             if main_indicators is None:
                 logger.warning("AKShare主要财务指标为空")
                 return None
@@ -1361,29 +1365,30 @@ class OptimizedChinaDataProvider:
                 if not main_indicators:
                     logger.warning("AKShare主要财务指标列表为空")
                     return None
-                # 列表格式：[{指标: 值, ...}, ...]
-                # 转换为 DataFrame 以便统一处理
-                import pandas as pd
-                main_indicators = pd.DataFrame(main_indicators)
+                # 竖式数据格式：[{报告期: ..., 净利润: ..., ...}, ...]
+                # 取最后一行（最新数据，按时间升序）
+                latest_data = main_indicators[-1]
+                report_period = latest_data.get('报告期', 'N/A')
+                logger.info(f"📅 使用AKShare最新数据期间: {report_period}")
+
+                # 直接使用 latest_data 作为 indicators_dict
+                indicators_dict = latest_data
+
             elif hasattr(main_indicators, 'empty') and main_indicators.empty:
                 logger.warning("AKShare主要财务指标DataFrame为空")
                 return None
-
-            # main_indicators是DataFrame，需要转换为字典格式便于查找
-            # 获取最新数据列（第3列，索引为2）
-            latest_col = main_indicators.columns[2] if len(main_indicators.columns) > 2 else None
-            if not latest_col:
-                logger.warning("AKShare主要财务指标缺少数据列")
-                return None
-
-            logger.info(f"📅 使用AKShare最新数据期间: {latest_col}")
-
-            # 创建指标名称到值的映射
-            indicators_dict = {}
-            for _, row in main_indicators.iterrows():
-                indicator_name = row['指标']
-                value = row[latest_col]
-                indicators_dict[indicator_name] = value
+            else:
+                # DataFrame 格式（其他接口可能返回）
+                import pandas as pd
+                if isinstance(main_indicators, pd.DataFrame):
+                    # 竖式 DataFrame：取最后一行
+                    latest_row = main_indicators.iloc[-1]
+                    indicators_dict = latest_row.to_dict()
+                    report_period = indicators_dict.get('报告期', 'N/A')
+                    logger.info(f"📅 使用AKShare最新数据期间: {report_period}")
+                else:
+                    logger.warning("AKShare主要财务指标格式未知")
+                    return None
 
             logger.debug(f"AKShare主要财务指标数量: {len(indicators_dict)}")
 
@@ -1448,13 +1453,17 @@ class OptimizedChinaDataProvider:
             except Exception as e:
                 logger.warning(f"⚠️ [AKShare-PE计算-第1层异常] 实时计算失败: {e}，将尝试降级计算")
 
-            # 获取ROE - 直接从指标中获取
-            roe_value = indicators_dict.get('净资产收益率(ROE)')
-            if roe_value is not None and str(roe_value) != 'nan' and roe_value != '--':
+            # 获取ROE - 直接从指标中获取（stock_financial_abstract_ths 字段名）
+            roe_value = indicators_dict.get('净资产收益率')
+            # 处理 False 值（AKShare 缺失数据用 False 表示）
+            if roe_value is not None and roe_value is not False and str(roe_value) != 'nan' and roe_value != '--':
                 try:
-                    roe_val = float(roe_value)
-                    # ROE通常是百分比形式
-                    metrics["roe"] = f"{roe_val:.1f}%"
+                    # 处理带百分号的数值（如 "2.83%"）
+                    if isinstance(roe_value, str) and '%' in roe_value:
+                        roe_val = float(roe_value.replace('%', '').replace(',', ''))
+                    else:
+                        roe_val = float(roe_value)
+                    metrics["roe"] = f"{roe_val:.2f}%"
                     logger.debug(f"✅ 获取ROE: {metrics['roe']}")
                 except (ValueError, TypeError):
                     metrics["roe"] = "N/A"
@@ -1477,33 +1486,32 @@ class OptimizedChinaDataProvider:
                 logger.info(f"📊 [AKShare-PE计算-第2层] 尝试使用股价/EPS计算")
 
                 # 计算 PE - 优先使用 TTM 数据
-                # 尝试从 main_indicators DataFrame 计算 TTM EPS
+                # 竖式数据：main_indicators 是列表，每行包含 基本每股收益 字段
                 ttm_eps = None
                 try:
-                    # main_indicators 是 DataFrame，包含多期数据
-                    # 尝试计算 TTM EPS
-                    if '基本每股收益' in main_indicators['指标'].values:
-                        # 提取基本每股收益的所有期数数据
-                        eps_row = main_indicators[main_indicators['指标'] == '基本每股收益']
-                        if not eps_row.empty:
-                            # 获取所有数值列（排除'指标'列）
-                            value_cols = [col for col in eps_row.columns if col != '指标']
+                    if isinstance(main_indicators, list) and len(main_indicators) >= 4:
+                        # 构建 DataFrame 用于 TTM 计算
+                        import pandas as pd
+                        eps_data = []
+                        for row_data in main_indicators:
+                            eps_val = row_data.get('基本每股收益')
+                            report_period = row_data.get('报告期', '')
+                            if eps_val is not None and eps_val is not False and report_period:
+                                # 处理可能的数值格式
+                                if isinstance(eps_val, str):
+                                    eps_val = eps_val.replace(',', '').replace('%', '')
+                                try:
+                                    eps_data.append({'报告期': report_period.replace('-', ''), '基本每股收益': float(eps_val)})
+                                except (ValueError, TypeError):
+                                    continue
 
-                            # 构建 DataFrame 用于 TTM 计算
-                            import pandas as pd
-                            eps_data = []
-                            for col in value_cols:
-                                eps_val = eps_row[col].iloc[0]
-                                if eps_val is not None and str(eps_val) != 'nan' and eps_val != '--':
-                                    eps_data.append({'报告期': col, '基本每股收益': eps_val})
-
-                            if len(eps_data) >= 2:
-                                eps_df = pd.DataFrame(eps_data)
-                                # 使用 TTM 计算函数
-                                from scripts.sync_financial_data import _calculate_ttm_metric
-                                ttm_eps = _calculate_ttm_metric(eps_df, '基本每股收益')
-                                if ttm_eps:
-                                    logger.info(f"✅ 计算 TTM EPS: {ttm_eps:.4f} 元")
+                        if len(eps_data) >= 4:
+                            eps_df = pd.DataFrame(eps_data)
+                            # 使用 TTM 计算函数（从 sync_financial_data 导入）
+                            from scripts.sync_financial_data import _calculate_ttm_metric
+                            ttm_eps = _calculate_ttm_metric(eps_df, '基本每股收益')
+                            if ttm_eps:
+                                logger.info(f"✅ 计算 TTM EPS: {ttm_eps:.4f} 元")
                 except Exception as e:
                     logger.debug(f"计算 TTM EPS 失败: {e}")
 
@@ -1512,10 +1520,13 @@ class OptimizedChinaDataProvider:
                 pe_type = "TTM" if ttm_eps else "单期"
 
                 if not eps_for_pe:
-                    # 降级到单期 EPS
+                    # 降级到单期 EPS（从最新数据中获取）
                     eps_value = indicators_dict.get('基本每股收益')
-                    if eps_value is not None and str(eps_value) != 'nan' and eps_value != '--':
+                    if eps_value is not None and eps_value is not False and str(eps_value) != 'nan' and eps_value != '--':
                         try:
+                            # 处理数值格式
+                            if isinstance(eps_value, str):
+                                eps_value = eps_value.replace(',', '')
                             eps_for_pe = float(eps_value)
                         except (ValueError, TypeError):
                             pass
@@ -1535,10 +1546,13 @@ class OptimizedChinaDataProvider:
             if pb_value is None:
                 logger.info(f"📊 [AKShare-PB计算-第2层] 尝试使用股价/BPS计算")
 
-                # 获取每股净资产 - 用于计算PB
-                bps_value = indicators_dict.get('每股净资产_最新股数')
-                if bps_value is not None and str(bps_value) != 'nan' and bps_value != '--':
+                # 获取每股净资产 - 用于计算PB（stock_financial_abstract_ths 字段名）
+                bps_value = indicators_dict.get('每股净资产')
+                if bps_value is not None and bps_value is not False and str(bps_value) != 'nan' and bps_value != '--':
                     try:
+                        # 处理数值格式
+                        if isinstance(bps_value, str):
+                            bps_value = bps_value.replace(',', '')
                         bps_val = float(bps_value)
                         if bps_val > 0:
                             # 计算PB = 股价 / 每股净资产
@@ -1556,34 +1570,22 @@ class OptimizedChinaDataProvider:
                     logger.error(f"❌ [AKShare-PB计算-全部失败] 无可用BPS数据")
 
             # 尝试获取其他指标
-            # 总资产收益率(ROA)
-            roa_value = indicators_dict.get('总资产报酬率')
-            if roa_value is not None and str(roa_value) != 'nan' and roa_value != '--':
-                try:
-                    roa_val = float(roa_value)
-                    metrics["roa"] = f"{roa_val:.1f}%"
-                except (ValueError, TypeError):
-                    metrics["roa"] = "N/A"
-            else:
-                metrics["roa"] = "N/A"
+            # 总资产收益率(ROA) - stock_financial_abstract_ths 不直接提供，设为N/A
+            metrics["roa"] = "N/A"
 
-            # 毛利率
-            gross_margin_value = indicators_dict.get('毛利率')
-            if gross_margin_value is not None and str(gross_margin_value) != 'nan' and gross_margin_value != '--':
-                try:
-                    gross_margin_val = float(gross_margin_value)
-                    metrics["gross_margin"] = f"{gross_margin_val:.1f}%"
-                except (ValueError, TypeError):
-                    metrics["gross_margin"] = "N/A"
-            else:
-                metrics["gross_margin"] = "N/A"
+            # 毛利率 - stock_financial_abstract_ths 不直接提供，设为N/A
+            metrics["gross_margin"] = "N/A"
 
             # 销售净利率
             net_margin_value = indicators_dict.get('销售净利率')
-            if net_margin_value is not None and str(net_margin_value) != 'nan' and net_margin_value != '--':
+            if net_margin_value is not None and net_margin_value is not False and str(net_margin_value) != 'nan' and net_margin_value != '--':
                 try:
-                    net_margin_val = float(net_margin_value)
-                    metrics["net_margin"] = f"{net_margin_val:.1f}%"
+                    # 处理带百分号的数值
+                    if isinstance(net_margin_value, str) and '%' in net_margin_value:
+                        net_margin_val = float(net_margin_value.replace('%', '').replace(',', ''))
+                    else:
+                        net_margin_val = float(net_margin_value)
+                    metrics["net_margin"] = f"{net_margin_val:.2f}%"
                 except (ValueError, TypeError):
                     metrics["net_margin"] = "N/A"
             else:
@@ -1591,10 +1593,14 @@ class OptimizedChinaDataProvider:
 
             # 资产负债率
             debt_ratio_value = indicators_dict.get('资产负债率')
-            if debt_ratio_value is not None and str(debt_ratio_value) != 'nan' and debt_ratio_value != '--':
+            if debt_ratio_value is not None and debt_ratio_value is not False and str(debt_ratio_value) != 'nan' and debt_ratio_value != '--':
                 try:
-                    debt_ratio_val = float(debt_ratio_value)
-                    metrics["debt_ratio"] = f"{debt_ratio_val:.1f}%"
+                    # 处理带百分号的数值
+                    if isinstance(debt_ratio_value, str) and '%' in debt_ratio_value:
+                        debt_ratio_val = float(debt_ratio_value.replace('%', '').replace(',', ''))
+                    else:
+                        debt_ratio_val = float(debt_ratio_value)
+                    metrics["debt_ratio"] = f"{debt_ratio_val:.2f}%"
                 except (ValueError, TypeError):
                     metrics["debt_ratio"] = "N/A"
             else:
@@ -1602,7 +1608,7 @@ class OptimizedChinaDataProvider:
 
             # 流动比率
             current_ratio_value = indicators_dict.get('流动比率')
-            if current_ratio_value is not None and str(current_ratio_value) != 'nan' and current_ratio_value != '--':
+            if current_ratio_value is not None and current_ratio_value is not False and str(current_ratio_value) != 'nan' and current_ratio_value != '--':
                 try:
                     current_ratio_val = float(current_ratio_value)
                     metrics["current_ratio"] = f"{current_ratio_val:.2f}"
@@ -1613,7 +1619,7 @@ class OptimizedChinaDataProvider:
 
             # 速动比率
             quick_ratio_value = indicators_dict.get('速动比率')
-            if quick_ratio_value is not None and str(quick_ratio_value) != 'nan' and quick_ratio_value != '--':
+            if quick_ratio_value is not None and quick_ratio_value is not False and str(quick_ratio_value) != 'nan' and quick_ratio_value != '--':
                 try:
                     quick_ratio_val = float(quick_ratio_value)
                     metrics["quick_ratio"] = f"{quick_ratio_val:.2f}"
