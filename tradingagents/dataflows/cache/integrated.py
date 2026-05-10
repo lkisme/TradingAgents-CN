@@ -173,17 +173,17 @@ class IntegratedCacheManager:
         else:
             return self.legacy_cache.load_news_data(cache_key)
     
-    def save_fundamentals_data(self, symbol: str, data: Any, data_source: str = "default") -> str:
+    def save_fundamentals_data(self, symbol: str, fundamentals_data: Any, data_source: str = "default") -> str:
         """保存基本面数据"""
         if self.use_adaptive:
             return self.adaptive_cache.save_data(
                 symbol=symbol,
-                data=data,
+                data=fundamentals_data,
                 data_source=data_source,
                 data_type="fundamentals_data"
             )
         else:
-            return self.legacy_cache.save_fundamentals_data(symbol, data, data_source)
+            return self.legacy_cache.save_fundamentals_data(symbol, fundamentals_data, data_source)
     
     def load_fundamentals_data(self, cache_key: str) -> Optional[Any]:
         """加载基本面数据"""
