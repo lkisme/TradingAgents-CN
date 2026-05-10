@@ -219,19 +219,22 @@ class MongoDBCacheAdapter:
             logger.warning(f"⚠️ 获取历史数据失败: {e}")
             return None
     
+    
     def get_financial_data(self, symbol: str, report_period: str = None) -> Optional[Dict[str, Any]]:
-        """获取财务数据，按数据源优先级查询"""
+        """获取财务数据，按数据源优先级查询，fallback 到 financial_data_cache"""
         if not self.use_app_cache or self.db is None:
             return None
 
         try:
             code6 = str(symbol).zfill(6)
+            
+            # 第一优先级：从 stock_financial_data 集合获取标准化财务数据
             collection = self.db.stock_financial_data
 
             # 获取数据源优先级
             priority_order = self._get_data_source_priority(symbol)
 
-            # 按优先级查询
+            # 按优先级查询 stock_financial_data
             for data_source in priority_order:
                 # 构建查询条件
                 query = {
@@ -245,18 +248,61 @@ class MongoDBCacheAdapter:
                 doc = collection.find_one(query, {"_id": 0}, sort=[("report_period", -1)])
 
                 if doc:
-                    logger.info(f"✅ [数据来源: MongoDB-{data_source}] {symbol}财务数据")
+                    logger.info(f"✅ [数据来源: MongoDB-stock_financial_data-{data_source}] {symbol}财务数据")
                     logger.debug(f"📊 [财务数据] 成功提取{symbol}的财务数据，包含字段: {list(doc.keys())}")
                     return doc
 
+            # 第二优先级：从 financial_data_cache 集合获取原始缓存数据
+            logger.info(f"🔄 [财务数据] stock_financial_data 未找到{symbol}数据，尝试 financial_data_cache")
+            cache_collection = self.db.financial_data_cache
+            
+            # financial_data_cache 使用 symbol 字段存储股票代码
+            cache_query = {"symbol": code6}
+            cache_doc = cache_collection.find_one(cache_query, {"_id": 0})
+            
+            if cache_doc:
+                logger.info(f"✅ [数据来源: MongoDB-financial_data_cache] {symbol}财务数据")
+                # 解析 financial_data_cache 的数据格式
+                financial_data = cache_doc.get("financial_data", {})
+                if financial_data:
+                    # 提取 main_indicators（主要财务指标）
+                    main_indicators = financial_data.get("main_indicators", [])
+                    if main_indicators and len(main_indicators) > 0:
+                        # 取最近一条（数组通常是按时间倒序排列，第一条是最新）
+                        latest = main_indicators[0] if isinstance(main_indicators, list) else main_indicators
+                        
+                        # 转换为标准格式返回
+                        result = {
+                            "code": code6,
+                            "symbol": code6,
+                            "report_period": latest.get("报告期", ""),
+                            "data_source": cache_doc.get("data_source", "akshare"),
+                            # 标准化字段名
+                            "total_revenue": latest.get("营业总收入"),
+                            "net_profit": latest.get("净利润"),
+                            "total_assets": latest.get("总资产"),
+                            "total_equity": latest.get("股东权益") or latest.get("每股净资产"),
+                            "roe": latest.get("净资产收益率") or latest.get("净资产收益率-摊薄"),
+                            "eps": latest.get("基本每股收益"),
+                            "roe_waa": latest.get("净资产收益率-摊薄"),
+                            # 保留原始数据供后续解析
+                            "raw_indicators": latest,
+                            "all_indicators": main_indicators
+                        }
+                        logger.debug(f"📊 [财务缓存] 成功解析{symbol}财务数据，报告期: {result.get('report_period')}")
+                        return result
+                    else:
+                        logger.warning(f"⚠️ [财务缓存] {symbol} 缓存数据无 main_indicators")
+                else:
+                    logger.warning(f"⚠️ [财务缓存] {symbol} 缓存数据无 financial_data 字段")
+
             # 所有数据源都没有数据
-            logger.debug(f"📊 [数据来源: MongoDB] 所有数据源都没有财务数据: {symbol}")
+            logger.info(f"📊 [数据来源: MongoDB] 所有数据源都没有财务数据: {symbol}")
             return None
 
         except Exception as e:
             logger.warning(f"⚠️ [数据来源: MongoDB-财务数据] 获取财务数据失败: {e}")
             return None
-    
     def get_news_data(self, symbol: str = None, hours_back: int = 24, limit: int = 20) -> Optional[List[Dict[str, Any]]]:
         """获取新闻数据"""
         if not self.use_app_cache or self.db is None:

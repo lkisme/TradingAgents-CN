@@ -1928,17 +1928,66 @@ class DataSourceManager:
         return f"⚠️ Tushare基本面数据功能暂时不可用，请使用其他数据源"
 
     def _get_akshare_fundamentals(self, symbol: str) -> str:
-        """从 AKShare 生成基本面分析"""
+        """从 AKShare/BaoStock 获取基本面数据，并自动缓存到 MongoDB"""
         logger.debug(f"📊 [AKShare] 调用参数: symbol={symbol}")
 
         try:
-            # AKShare 没有直接的基本面数据接口，使用生成分析
-            logger.info(f"📊 [数据来源: AKShare-生成分析] 生成基本面分析: {symbol}")
-            return self._generate_fundamentals_analysis(symbol)
+            # 1. 使用 ResilientProvider 获取财务数据（支持自动降级）
+            from tradingagents.dataflows.providers.china.resilient_provider import get_resilient_provider
+            import concurrent.futures
+
+            provider = get_resilient_provider()
+
+            def fetch_financial_data_sync():
+                """同步获取财务数据"""
+                import asyncio
+                try:
+                    # 尝试获取已有的事件循环
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 如果循环正在运行，创建新的循环
+                        new_loop = asyncio.new_event_loop()
+                        try:
+                            return new_loop.run_until_complete(
+                                provider.get_financial_data(symbol)
+                            )
+                        finally:
+                            new_loop.close()
+                    else:
+                        return loop.run_until_complete(
+                            provider.get_financial_data(symbol)
+                        )
+                except RuntimeError:
+                    # 没有事件循环，创建新的
+                    new_loop = asyncio.new_event_loop()
+                    try:
+                        return new_loop.run_until_complete(
+                            provider.get_financial_data(symbol)
+                        )
+                    finally:
+                        new_loop.close()
+
+            # 使用线程池执行
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(fetch_financial_data_sync)
+                financial_data = future.result(timeout=30)  # 30秒超时
+
+            if financial_data:
+                # 2. 获取成功，自动缓存到 MongoDB
+                current_source = provider.get_current_source() or "akshare"
+                self._save_financial_data_to_mongodb(symbol, financial_data, current_source)
+
+                # 3. 格式化返回报告
+                logger.info(f"✅ [数据来源: {current_source}-财务数据] 成功获取并缓存: {symbol}")
+                return self._format_financial_data_from_dict(symbol, financial_data, current_source)
+            else:
+                # 获取失败，降级到生成基本分析
+                logger.warning(f"⚠️ [数据来源: AKShare] 财务数据获取失败，生成基本分析: {symbol}")
+                return self._generate_fundamentals_analysis(symbol)
 
         except Exception as e:
-            logger.error(f"❌ [数据来源: AKShare异常] 生成基本面分析失败: {e}")
-            return f"❌ 生成{symbol}基本面分析失败: {e}"
+            logger.error(f"❌ [数据来源: AKShare异常] 获取财务数据失败: {e}", exc_info=True)
+            return self._generate_fundamentals_analysis(symbol)
 
     def _get_valuation_indicators(self, symbol: str) -> Dict:
         """从stock_basic_info集合获取估值指标"""
@@ -2082,6 +2131,165 @@ class DataSourceManager:
         except Exception as e:
             logger.error(f"❌ 格式化财务数据失败: {e}")
             return f"❌ 格式化{symbol}财务数据失败: {e}"
+
+    def _save_financial_data_to_mongodb(self, symbol: str, financial_data: Dict[str, Any], data_source: str):
+        """
+        将财务数据保存到 MongoDB（自动缓存）
+
+        Args:
+            symbol: 股票代码
+            financial_data: 财务数据字典
+            data_source: 数据来源 (akshare/baostock)
+        """
+        try:
+            # 检查 MongoDB 缓存是否启用
+            if not self.use_mongodb_cache:
+                logger.debug(f"📊 MongoDB缓存未启用，跳过自动保存")
+                return
+
+            # 使用 FinancialDataService 保存数据
+            from app.services.financial_data_service import get_financial_data_service
+            import asyncio
+
+            async def save_data_async():
+                service = await get_financial_data_service()
+                saved_count = await service.save_financial_data(
+                    symbol=symbol,
+                    financial_data=financial_data,
+                    data_source=data_source or "akshare",
+                    market="CN",
+                    report_type="quarterly"
+                )
+                return saved_count
+
+            # 执行异步保存
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 使用线程池执行异步任务
+                    import concurrent.futures
+                    import threading
+
+                    def run_in_new_loop():
+                        new_loop = asyncio.new_event_loop()
+                        try:
+                            return new_loop.run_until_complete(save_data_async())
+                        finally:
+                            new_loop.close()
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(run_in_new_loop)
+                        saved_count = future.result(timeout=15)
+                else:
+                    saved_count = loop.run_until_complete(save_data_async())
+            except RuntimeError:
+                saved_count = asyncio.run(save_data_async())
+
+            if saved_count > 0:
+                logger.info(f"✅ [MongoDB缓存] 财务数据已自动缓存: {symbol}, {saved_count}条记录 (来源: {data_source})")
+            else:
+                logger.warning(f"⚠️ [MongoDB缓存] 财务数据缓存结果为0: {symbol}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ [MongoDB缓存] 自动保存财务数据失败: {e}")
+            # 缓存失败不影响返回结果
+
+    def _format_financial_data_from_dict(self, symbol: str, financial_data: Dict[str, Any], data_source: str) -> str:
+        """
+        格式化从 AKShare/BaoStock 获取的财务数据为报告
+
+        Args:
+            symbol: 股票代码
+            financial_data: 财务数据字典
+            data_source: 数据来源
+
+        Returns:
+            格式化的财务数据报告
+        """
+        try:
+            # 获取股票基本信息
+            stock_info = self.get_stock_info(symbol)
+
+            report = f"📊 {symbol} 基本面数据（实时获取）\n\n"
+            report += f"📈 股票名称: {stock_info.get('name', '未知')}\n"
+            report += f"🏢 所属行业: {stock_info.get('industry', '未知')}\n"
+            report += f"📍 所属地区: {stock_info.get('area', '未知')}\n"
+            report += f"💡 数据来源: {data_source}（已自动缓存）\n\n"
+
+            # 提取主要财务指标
+            main_indicators = financial_data.get('main_indicators', [])
+            if main_indicators and len(main_indicators) > 0:
+                latest = main_indicators[0]
+
+                report += "💰 核心财务指标:\n"
+                revenue = latest.get('营业收入') or latest.get('营业总收入')
+                if revenue:
+                    report += f"   营业收入: {revenue}\n"
+                net_profit = latest.get('净利润') or latest.get('净利润(含少数股东损益)')
+                if net_profit:
+                    report += f"   净利润: {net_profit}\n"
+                total_assets = latest.get('总资产')
+                if total_assets:
+                    report += f"   总资产: {total_assets}\n"
+                roe = latest.get('净资产收益率') or latest.get('净资产收益率(ROE)')
+                if roe:
+                    report += f"   净资产收益率(ROE): {roe}\n"
+                debt_ratio = latest.get('资产负债率')
+                if debt_ratio:
+                    report += f"   资产负债率: {debt_ratio}\n"
+
+            # 资产负债表摘要
+            balance_sheet = financial_data.get('balance_sheet', [])
+            if balance_sheet and len(balance_sheet) > 0:
+                latest_balance = balance_sheet[0]
+                report += "\n📋 资产负债表摘要:\n"
+                cash = latest_balance.get('货币资金')
+                if cash:
+                    report += f"   货币资金: {cash}\n"
+                total_liab = latest_balance.get('负债合计')
+                if total_liab:
+                    report += f"   负债合计: {total_liab}\n"
+                total_equity = latest_balance.get('股东权益合计') or latest_balance.get('所有者权益合计')
+                if total_equity:
+                    report += f"   股东权益: {total_equity}\n"
+
+            # 利润表摘要
+            income_statement = financial_data.get('income_statement', [])
+            if income_statement and len(income_statement) > 0:
+                latest_income = income_statement[0]
+                report += "\n📈 利润表摘要:\n"
+                total_revenue = latest_income.get('营业总收入') or latest_income.get('营业收入')
+                if total_revenue:
+                    report += f"   营业总收入: {total_revenue}\n"
+                operating_cost = latest_income.get('营业成本') or latest_income.get('营业总成本')
+                if operating_cost:
+                    report += f"   营业成本: {operating_cost}\n"
+                operating_profit = latest_income.get('营业利润')
+                if operating_profit:
+                    report += f"   营业利润: {operating_profit}\n"
+
+            # 现金流量表摘要
+            cash_flow = financial_data.get('cash_flow', [])
+            if cash_flow and len(cash_flow) > 0:
+                latest_cash = cash_flow[0]
+                report += "\n💵 现金流量表摘要:\n"
+                operating_cf = latest_cash.get('经营活动产生的现金流量净额') or latest_cash.get('经营活动现金流净额')
+                if operating_cf:
+                    report += f"   经营活动现金流: {operating_cf}\n"
+                investing_cf = latest_cash.get('投资活动产生的现金流量净额')
+                if investing_cf:
+                    report += f"   投资活动现金流: {investing_cf}\n"
+                financing_cf = latest_cash.get('筹资活动产生的现金流量净额')
+                if financing_cf:
+                    report += f"   筹资活动现金流: {financing_cf}\n"
+
+            report += "\n💡 数据已自动缓存到 MongoDB，下次查询将直接使用缓存\n"
+
+            return report
+
+        except Exception as e:
+            logger.error(f"❌ 格式化财务数据失败: {e}")
+            return f"📊 {symbol} 基本面数据已获取（格式化失败）\n💡 数据已缓存"
 
     def _generate_fundamentals_analysis(self, symbol: str) -> str:
         """生成基本的基本面分析"""

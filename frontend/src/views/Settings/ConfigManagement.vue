@@ -533,14 +533,14 @@
                 filterable
               >
                 <el-option
-                  v-for="model in availableModelsForProvider(systemSettings.default_provider)"
+                  v-for="model in allEnabledModels()"
                   :key="`${model.provider}/${model.model_name}`"
-                  :label="model.model_display_name || model.model_name"
+                  :label="`${model.model_display_name || model.model_name} (${getProviderDisplayName(model.provider)})`"
                   :value="model.model_name"
                 >
                   <div style="display: flex; flex-direction: column;">
                     <span>{{ model.model_display_name || model.model_name }}</span>
-                    <span style="font-size: 12px; color: #909399;">{{ model.model_name }}</span>
+                    <span style="font-size: 12px; color: #909399;">厂商: {{ getProviderDisplayName(model.provider) }} | {{ model.model_name }}</span>
                   </div>
                 </el-option>
               </el-select>
@@ -555,14 +555,14 @@
                 filterable
               >
                 <el-option
-                  v-for="model in availableModelsForProvider(systemSettings.default_provider)"
+                  v-for="model in allEnabledModels()"
                   :key="`${model.provider}/${model.model_name}`"
-                  :label="model.model_display_name || model.model_name"
+                  :label="`${model.model_display_name || model.model_name} (${getProviderDisplayName(model.provider)})`"
                   :value="model.model_name"
                 >
                   <div style="display: flex; flex-direction: column;">
                     <span>{{ model.model_display_name || model.model_name }}</span>
-                    <span style="font-size: 12px; color: #909399;">{{ model.model_name }}</span>
+                    <span style="font-size: 12px; color: #909399;">厂商: {{ getProviderDisplayName(model.provider) }} | {{ model.model_name }}</span>
                   </div>
                 </el-option>
               </el-select>
@@ -1242,6 +1242,14 @@ const availableModelsForProvider = (providerId: string) => {
     return config.provider === providerId && config.enabled
   })
   console.log(`✅ 找到 ${models.length} 个可用模型:`, models)
+  return sortLLMConfigsByNewest(models)
+}
+
+// 函数：获取所有启用的模型（不按厂家过滤）
+const allEnabledModels = () => {
+  console.log('🔍 获取所有启用的模型')
+  const models = llmConfigs.value.filter(config => config.enabled)
+  console.log(`✅ 找到 ${models.length} 个启用模型`)
   return sortLLMConfigsByNewest(models)
 }
 
@@ -2190,21 +2198,9 @@ const migrateLegacyConfig = async () => {
 watch(
   () => systemSettings.value.default_provider,
   (newProvider, oldProvider) => {
-    if (newProvider !== oldProvider && newProvider) {
-      const availableModels = availableModelsForProvider(newProvider)
-      const quickModel = systemSettings.value.quick_analysis_model
-      const deepModel = systemSettings.value.deep_analysis_model
-
-      // 如果当前选择的快速分析模型不属于新供应商，清空
-      if (quickModel && !availableModels.find(m => m.model_name === quickModel)) {
-        systemSettings.value.quick_analysis_model = ''
-      }
-
-      // 如果当前选择的深度决策模型不属于新供应商，清空
-      if (deepModel && !availableModels.find(m => m.model_name === deepModel)) {
-        systemSettings.value.deep_analysis_model = ''
-      }
-    }
+    // 当 default_provider 变化时，不再清空模型选择
+    // 因为现在快速分析和深度决策模型可以独立选择不同厂商的模型
+    console.log('默认供应商变化:', oldProvider, '->', newProvider)
   }
 )
 
