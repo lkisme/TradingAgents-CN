@@ -868,11 +868,25 @@ class OptimizedChinaDataProvider:
                     else:
                         logger.warning(f"⚠️ MongoDB 财务数据解析失败")
                 else:
-                    logger.info(f"🔄 MongoDB 未找到{symbol}财务数据，尝试从 AKShare API 获取")
+                    logger.info(f"🔄 MongoDB 未找到{symbol}财务数据，尝试从 financial_data_cache 获取")
             else:
                 logger.info(f"🔄 数据库缓存未启用，直接从AKShare API获取{symbol}财务数据")
 
-            # 第二优先级：从AKShare API获取
+            # 第二优先级：从 financial_data_cache 读取（24小时内的原始财务数据缓存）
+            cached_raw = self._get_cached_raw_financial_data(symbol)
+            if cached_raw and cached_raw.get('main_indicators'):
+                logger.info(f"🔄 尝试使用 financial_data_cache 中的原始财务数据: {symbol}")
+                cached_stock_info = self._get_cached_stock_info(symbol)
+                metrics = self._parse_akshare_financial_data(cached_raw, cached_stock_info, price_value)
+                if metrics:
+                    logger.info(f"✅ financial_data_cache 命中，财务数据解析成功: {symbol}")
+                    return metrics
+                else:
+                    logger.warning(f"⚠️ financial_data_cache 数据解析失败，继续尝试 AKShare API")
+            else:
+                logger.info(f"🔄 financial_data_cache 未命中，尝试从 AKShare API 获取")
+
+            # 第三优先级：从AKShare API获取
             from .providers.china.akshare import get_akshare_provider
             import asyncio
 
@@ -911,7 +925,7 @@ class OptimizedChinaDataProvider:
             else:
                 logger.warning(f"⚠️ AKShare未连接，尝试Tushare")
 
-            # 第三优先级：使用Tushare数据源
+            # 第四优先级：使用Tushare数据源
             logger.info(f"🔄 使用Tushare备用数据源获取{symbol}财务数据")
             from .providers.china.tushare import get_tushare_provider
             import asyncio
@@ -2162,7 +2176,7 @@ def _add_financial_cache_methods():
     """为OptimizedChinaDataProvider类添加财务数据缓存方法"""
 
     def _get_cached_raw_financial_data(self, symbol: str) -> dict:
-        """从数据库缓存获取原始财务数据"""
+        """从 financial_data_cache 集合获取原始财务数据（24小时内有效）"""
         try:
             from .cache.app_adapter import get_mongodb_client
             client = get_mongodb_client()
@@ -2171,84 +2185,15 @@ def _add_financial_cache_methods():
                 return None
 
             db = client.get_database('tradingagents')
-
-            # 第一优先级：从 stock_financial_data 集合读取（定时任务同步的持久化数据）
-            stock_financial_collection = db.stock_financial_data
-
-            # 尝试使用 symbol 或 code 字段查询（兼容不同的同步服务）
-            financial_doc = stock_financial_collection.find_one({
-                '$or': [
-                    {'symbol': symbol},
-                    {'code': symbol}
-                ]
-            }, sort=[('updated_at', -1)])
-
-            if financial_doc:
-                logger.info(f"✅ [财务数据] 从 stock_financial_data 集合获取{symbol}财务数据")
-                # 将数据库文档转换为财务数据格式
-                financial_data = {}
-
-                # 提取各类财务数据
-                # 第一优先级：检查 raw_data 字段（Tushare 同步服务使用的结构）
-                if 'raw_data' in financial_doc and isinstance(financial_doc['raw_data'], dict):
-                    raw_data = financial_doc['raw_data']
-                    # 映射字段名：raw_data 中使用 cashflow_statement，我们需要 cash_flow
-                    if 'balance_sheet' in raw_data and raw_data['balance_sheet']:
-                        financial_data['balance_sheet'] = raw_data['balance_sheet']
-                    if 'income_statement' in raw_data and raw_data['income_statement']:
-                        financial_data['income_statement'] = raw_data['income_statement']
-                    if 'cashflow_statement' in raw_data and raw_data['cashflow_statement']:
-                        financial_data['cash_flow'] = raw_data['cashflow_statement']  # 注意字段名映射
-                    if 'financial_indicators' in raw_data and raw_data['financial_indicators']:
-                        financial_data['main_indicators'] = raw_data['financial_indicators']  # 注意字段名映射
-                    if 'main_business' in raw_data and raw_data['main_business']:
-                        financial_data['main_business'] = raw_data['main_business']
-
-                # 第二优先级：检查 financial_data 嵌套字段
-                elif 'financial_data' in financial_doc and isinstance(financial_doc['financial_data'], dict):
-                    nested_data = financial_doc['financial_data']
-                    if 'balance_sheet' in nested_data:
-                        financial_data['balance_sheet'] = nested_data['balance_sheet']
-                    if 'income_statement' in nested_data:
-                        financial_data['income_statement'] = nested_data['income_statement']
-                    if 'cash_flow' in nested_data:
-                        financial_data['cash_flow'] = nested_data['cash_flow']
-                    if 'main_indicators' in nested_data:
-                        financial_data['main_indicators'] = nested_data['main_indicators']
-
-                # 第三优先级：直接从文档根级别读取
-                else:
-                    if 'balance_sheet' in financial_doc and financial_doc['balance_sheet']:
-                        financial_data['balance_sheet'] = financial_doc['balance_sheet']
-                    if 'income_statement' in financial_doc and financial_doc['income_statement']:
-                        financial_data['income_statement'] = financial_doc['income_statement']
-                    if 'cash_flow' in financial_doc and financial_doc['cash_flow']:
-                        financial_data['cash_flow'] = financial_doc['cash_flow']
-                    if 'main_indicators' in financial_doc and financial_doc['main_indicators']:
-                        financial_data['main_indicators'] = financial_doc['main_indicators']
-
-                if financial_data:
-                    logger.info(f"📊 [财务数据] 成功提取{symbol}的财务数据，包含字段: {list(financial_data.keys())}")
-                    return financial_data
-                else:
-                    logger.warning(f"⚠️ [财务数据] {symbol}的 stock_financial_data 记录存在但无有效财务数据字段")
-            else:
-                logger.debug(f"📊 [财务数据] stock_financial_data 集合中未找到{symbol}的记录")
-
-            # 第二优先级：从 financial_data_cache 集合读取（临时缓存）
-            collection = db.financial_data_cache
-
-            # 查找缓存的原始财务数据
-            cache_doc = collection.find_one({
-                'symbol': symbol,
-                'cache_type': 'raw_financial_data'
-            }, sort=[('updated_at', -1)])
+            cache_doc = db.financial_data_cache.find_one(
+                {'symbol': symbol, 'cache_type': 'raw_financial_data'},
+                sort=[('updated_at', -1)]
+            )
 
             if cache_doc:
-                # 检查缓存是否过期（24小时）
                 from datetime import datetime, timedelta
                 cache_time = cache_doc.get('updated_at')
-                if cache_time and datetime.now() - cache_time < timedelta(hours=24):
+                if cache_time and datetime.utcnow() - cache_time < timedelta(days=7):
                     financial_data = cache_doc.get('financial_data', {})
                     if financial_data:
                         logger.info(f"✅ [财务缓存] 从 financial_data_cache 获取{symbol}原始财务数据")
@@ -2289,24 +2234,6 @@ def _add_financial_cache_methods():
 
         return {}
 
-    def _restore_financial_data_format(self, cached_data: dict) -> dict:
-        """将缓存的财务数据恢复为DataFrame格式"""
-        try:
-            import pandas as pd
-            restored_data = {}
-
-            for key, value in cached_data.items():
-                if isinstance(value, list) and value:  # 如果是list格式的数据
-                    # 转换回DataFrame
-                    restored_data[key] = pd.DataFrame(value)
-                else:
-                    restored_data[key] = value
-
-            return restored_data
-        except Exception as e:
-            logger.debug(f"📊 恢复财务数据格式失败: {e}")
-            return cached_data
-
     def _cache_raw_financial_data(self, symbol: str, financial_data: dict, stock_info: dict):
         """将原始财务数据缓存到数据库，同时写入 stock_financial_data 持久化集合"""
         try:
@@ -2338,7 +2265,7 @@ def _add_financial_cache_methods():
                 'cache_type': 'raw_financial_data',
                 'financial_data': serializable_data,
                 'stock_info': stock_info,
-                'updated_at': datetime.now()
+                'updated_at': datetime.utcnow()
             }
             db.financial_data_cache.replace_one(
                 {'symbol': symbol, 'cache_type': 'raw_financial_data'},
@@ -2347,17 +2274,12 @@ def _add_financial_cache_methods():
             )
             logger.info(f"✅ [财务缓存] {symbol}原始财务数据已缓存到 financial_data_cache")
 
-            # 2. 同时写入 stock_financial_data（标准化持久化集合）
+            # 2. 同时写入 stock_financial_data（标准化持久化集合，每期一条记录）
             try:
                 code6 = str(symbol).zfill(6)
                 main_indicators = serializable_data.get('main_indicators', [])
-                if not main_indicators:
+                if not main_indicators or not isinstance(main_indicators, list):
                     logger.debug(f"📊 [财务缓存] {symbol} main_indicators 为空，跳过写入 stock_financial_data")
-                    return
-
-                # 取最新一期（列表末尾，按时间升序）
-                latest = main_indicators[-1] if isinstance(main_indicators, list) else None
-                if not latest:
                     return
 
                 def _safe_float_val(v):
@@ -2374,16 +2296,13 @@ def _add_financial_cache_methods():
                     except (ValueError, TypeError):
                         return None
 
-                # 标准化报告期 YYYY-MM-DD -> YYYYMMDD
-                raw_period = str(latest.get('报告期', ''))
-                report_period = raw_period.replace('-', '')
-
-                # 计算 TTM 营业收入和净利润
+                # 预先计算最新一期的 TTM（只对最新期有意义）
+                import pandas as pd
+                from scripts.sync_financial_data import _calculate_ttm_metric
                 ttm_revenue = None
                 ttm_net_profit = None
+                latest_period_normalized = str(main_indicators[-1].get('报告期', '')).replace('-', '')
                 try:
-                    import pandas as pd
-                    from scripts.sync_financial_data import _calculate_ttm_metric
                     df_indicators = pd.DataFrame(main_indicators)
                     if '报告期' in df_indicators.columns:
                         if '营业总收入' in df_indicators.columns:
@@ -2393,42 +2312,57 @@ def _add_financial_cache_methods():
                 except Exception as e:
                     logger.debug(f"📊 [财务缓存] TTM计算失败: {e}")
 
-                std_doc = {
-                    "code": code6,
-                    "symbol": code6,
-                    "report_period": report_period,
-                    "data_source": "akshare",
-                    "updated_at": datetime.utcnow(),
-                    "roe": _safe_float_val(latest.get('净资产收益率')),
-                    "roa": None,
-                    "gross_margin": None,
-                    "netprofit_margin": _safe_float_val(latest.get('销售净利率')),
-                    "revenue": _safe_float_val(latest.get('营业总收入')),
-                    "revenue_ttm": ttm_revenue,
-                    "net_profit": _safe_float_val(latest.get('净利润')),
-                    "net_profit_ttm": ttm_net_profit,
-                    "total_assets": None,
-                    "total_hldr_eqy_exc_min_int": None,
-                    "basic_eps": _safe_float_val(latest.get('基本每股收益')),
-                    "bps": _safe_float_val(latest.get('每股净资产')),
-                    "debt_to_assets": _safe_float_val(latest.get('资产负债率')),
-                    "current_ratio": _safe_float_val(latest.get('流动比率')),
-                    "total_asset_turnover": None,
-                }
+                # 股本数据（所有期共用）
+                total_share = stock_info.get('total_share') if stock_info else None
+                float_share = stock_info.get('float_share') if stock_info else None
 
-                # 补充股本数据（如果 stock_info 有）
-                if stock_info:
-                    if stock_info.get('total_share'):
-                        std_doc['total_share'] = stock_info['total_share']
-                    if stock_info.get('float_share'):
-                        std_doc['float_share'] = stock_info['float_share']
+                # 遍历所有期，每期 upsert 一条记录
+                ops = []
+                for row in main_indicators:
+                    raw_period = str(row.get('报告期', ''))
+                    if not raw_period:
+                        continue
+                    report_period = raw_period.replace('-', '')
+                    is_latest = (report_period == latest_period_normalized)
 
-                db.stock_financial_data.update_one(
-                    {"code": code6, "report_period": report_period},
-                    {"$set": std_doc},
-                    upsert=True
-                )
-                logger.info(f"✅ [财务缓存] {symbol}标准化财务数据已写入 stock_financial_data (报告期: {report_period})")
+                    std_doc = {
+                        "code": code6,
+                        "symbol": code6,
+                        "report_period": report_period,
+                        "data_source": "akshare",
+                        "updated_at": datetime.utcnow(),
+                        "roe": _safe_float_val(row.get('净资产收益率')),
+                        "roa": None,
+                        "gross_margin": None,
+                        "netprofit_margin": _safe_float_val(row.get('销售净利率')),
+                        "revenue": _safe_float_val(row.get('营业总收入')),
+                        "revenue_ttm": ttm_revenue if is_latest else None,
+                        "net_profit": _safe_float_val(row.get('净利润')),
+                        "net_profit_ttm": ttm_net_profit if is_latest else None,
+                        "total_assets": None,
+                        "total_hldr_eqy_exc_min_int": None,
+                        "basic_eps": _safe_float_val(row.get('基本每股收益')),
+                        "bps": _safe_float_val(row.get('每股净资产')),
+                        "debt_to_assets": _safe_float_val(row.get('资产负债率')),
+                        "current_ratio": _safe_float_val(row.get('流动比率')),
+                        "total_asset_turnover": None,
+                    }
+                    if total_share:
+                        std_doc['total_share'] = total_share
+                    if float_share:
+                        std_doc['float_share'] = float_share
+
+                    from pymongo import UpdateOne
+                    ops.append(UpdateOne(
+                        {"code": code6, "report_period": report_period},
+                        {"$set": std_doc},
+                        upsert=True
+                    ))
+
+                if ops:
+                    result = db.stock_financial_data.bulk_write(ops, ordered=False)
+                    logger.info(f"✅ [财务缓存] {symbol}历史财务数据已写入 stock_financial_data: "
+                                f"{result.upserted_count}条新增, {result.modified_count}条更新, 共{len(ops)}期")
 
             except Exception as e:
                 logger.warning(f"⚠️ [财务缓存] 写入 stock_financial_data 失败: {e}")
@@ -2439,7 +2373,6 @@ def _add_financial_cache_methods():
     # 将方法添加到类中
     OptimizedChinaDataProvider._get_cached_raw_financial_data = _get_cached_raw_financial_data
     OptimizedChinaDataProvider._get_cached_stock_info = _get_cached_stock_info
-    OptimizedChinaDataProvider._restore_financial_data_format = _restore_financial_data_format
     OptimizedChinaDataProvider._cache_raw_financial_data = _cache_raw_financial_data
 
 # 执行方法添加
