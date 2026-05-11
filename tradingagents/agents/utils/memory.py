@@ -104,7 +104,19 @@ class FinancialSituationMemory:
         # 配置向量缓存的长度限制（向量缓存默认启用长度检查）
         self.max_embedding_length = int(os.getenv('MAX_EMBEDDING_CONTENT_LENGTH', '50000'))  # 默认50K字符
         self.enable_embedding_length_check = os.getenv('ENABLE_EMBEDDING_LENGTH_CHECK', 'true').lower() == 'true'  # 向量缓存默认启用
-        
+
+        # Embedding 禁用标志（维度不匹配或无可用密钥时设置为 True）
+        self._embedding_disabled = False
+
+        # 从 MongoDB 查找 embedding provider，覆盖 self.llm_provider 用于 embedding 初始化
+        # 这不影响 config["llm_provider"]（对话模型仍在用原值）
+        self.embedding_provider_doc = self._find_embedding_provider()
+        if self.embedding_provider_doc:
+            self.llm_provider = self.embedding_provider_doc["name"].lower()
+            logger.info(f"✅ MongoDB embedding provider: {self.llm_provider}")
+        else:
+            logger.warning(f"⚠️ MongoDB 无 embedding provider，使用配置中的 llm_provider={self.llm_provider}")
+
         # 根据LLM提供商选择嵌入模型和客户端
         # 初始化降级选项标志
         self.fallback_available = False
@@ -130,17 +142,17 @@ class FinancialSituationMemory:
                 except ImportError as e:
                     # DashScope包未安装
                     logger.error(f"❌ DashScope包未安装: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ 记忆功能已禁用")
 
                 except Exception as e:
                     # 其他初始化错误
                     logger.error(f"❌ DashScope初始化失败: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ 记忆功能已禁用")
             else:
                 # 没有DashScope密钥，禁用记忆功能
-                self.client = "DISABLED"
+                self._embedding_disabled = True
                 logger.warning(f"⚠️ 未找到DASHSCOPE_API_KEY，记忆功能已禁用")
                 logger.info(f"💡 系统将继续运行，但不会保存或检索历史记忆")
         elif self.llm_provider == "qianfan":
@@ -159,15 +171,15 @@ class FinancialSituationMemory:
                     logger.info(f"💡 千帆使用阿里百炼嵌入服务")
                 except ImportError as e:
                     logger.error(f"❌ DashScope包未安装: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ 千帆记忆功能已禁用")
                 except Exception as e:
                     logger.error(f"❌ 千帆嵌入初始化失败: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ 千帆记忆功能已禁用")
             else:
                 # 没有DashScope密钥，禁用记忆功能
-                self.client = "DISABLED"
+                self._embedding_disabled = True
                 logger.warning(f"⚠️ 千帆未找到DASHSCOPE_API_KEY，记忆功能已禁用")
                 logger.info(f"💡 系统将继续运行，但不会保存或检索历史记忆")
         elif self.llm_provider == "deepseek":
@@ -220,11 +232,11 @@ class FinancialSituationMemory:
                         except Exception as e:
                             logger.error(f"❌ DeepSeek嵌入服务不可用: {e}")
                             # 禁用内存功能
-                            self.client = "DISABLED"
+                            self._embedding_disabled = True
                             logger.info(f"🚨 内存功能已禁用，系统将继续运行但不保存历史记忆")
                     else:
                         # 禁用内存功能而不是抛出异常
-                        self.client = "DISABLED"
+                        self._embedding_disabled = True
                         logger.info(f"🚨 未找到可用的嵌入服务，内存功能已禁用")
         elif self.llm_provider == "google":
             # Google AI使用阿里百炼嵌入（如果可用），否则禁用记忆功能
@@ -253,15 +265,15 @@ class FinancialSituationMemory:
                         
                 except ImportError as e:
                     logger.error(f"❌ DashScope包未安装: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ Google AI记忆功能已禁用")
                 except Exception as e:
                     logger.error(f"❌ DashScope初始化失败: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ Google AI记忆功能已禁用")
             else:
                 # 没有DashScope密钥，禁用记忆功能
-                self.client = "DISABLED"
+                self._embedding_disabled = True
                 self.fallback_available = False
                 logger.warning(f"⚠️ Google AI未找到DASHSCOPE_API_KEY，记忆功能已禁用")
                 logger.info(f"💡 系统将继续运行，但不会保存或检索历史记忆")
@@ -280,15 +292,15 @@ class FinancialSituationMemory:
                     logger.info(f"💡 OpenRouter使用阿里百炼嵌入服务")
                 except ImportError as e:
                     logger.error(f"❌ DashScope包未安装: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ OpenRouter记忆功能已禁用")
                 except Exception as e:
                     logger.error(f"❌ DashScope初始化失败: {e}")
-                    self.client = "DISABLED"
+                    self._embedding_disabled = True
                     logger.warning(f"⚠️ OpenRouter记忆功能已禁用")
             else:
                 # 没有DashScope密钥，禁用记忆功能
-                self.client = "DISABLED"
+                self._embedding_disabled = True
                 logger.warning(f"⚠️ OpenRouter未找到DASHSCOPE_API_KEY，记忆功能已禁用")
                 logger.info(f"💡 系统将继续运行，但不会保存或检索历史记忆")
         elif config["backend_url"] == "http://localhost:11434/v1":
@@ -303,12 +315,143 @@ class FinancialSituationMemory:
                     base_url=config["backend_url"]
                 )
             else:
-                self.client = "DISABLED"
+                self._embedding_disabled = True
                 logger.warning(f"⚠️ 未找到OPENAI_API_KEY，记忆功能已禁用")
 
         # 使用单例ChromaDB管理器
         self.chroma_manager = ChromaDBManager()
         self.situation_collection = self.chroma_manager.get_or_create_collection(name)
+        
+        # 🆕 维度检测
+        self.model_dimension = self._get_model_dimension()
+        if not self._check_dimension_compatibility():
+            self._embedding_disabled = True
+            logger.warning(f"⚠️ 记忆功能已禁用（维度不匹配）")
+        elif not self._embedding_disabled:
+            logger.info(f"✅ 记忆功能启用 (维度={self.model_dimension})")
+
+    def _find_embedding_provider(self) -> Optional[dict]:
+        """从 MongoDB llm_providers 查找支持 embedding 的 active provider"""
+        try:
+            from tradingagents.config.database_manager import get_database_manager
+            db_manager = get_database_manager()
+            mongodb_client = db_manager.get_mongodb_client()
+            if mongodb_client is None:
+                logger.warning("⚠️ MongoDB 不可用，无法查询 embedding provider")
+                return None
+
+            # get_database() 可能因连接字符串无数据库名而失败，显式指定
+            db_name = os.getenv('MONGODB_DATABASE_NAME', os.getenv('MONGODB_DATABASE', 'tradingagents'))
+            db = mongodb_client[db_name]
+            providers = db.llm_providers
+
+            # 查找 active 且 supported_features 含 "embedding" 的 provider
+            provider_doc = providers.find_one({
+                "is_active": True,
+                "supported_features": "embedding"
+            })
+
+            if provider_doc:
+                # 验证 api_key 是否有效（非空、非占位符）
+                api_key = provider_doc.get("api_key", "")
+                if api_key and not api_key.startswith("your_"):
+                    logger.info(f"📊 MongoDB 找到 embedding provider: {provider_doc.get('name')} (api_key 有效)")
+                    return provider_doc
+                else:
+                    logger.warning(f"⚠️ MongoDB embedding provider {provider_doc.get('name')} api_key 无效，跳过")
+                    # 继续查找下一个
+                    provider_doc = providers.find_one({
+                        "is_active": True,
+                        "supported_features": "embedding",
+                        "api_key": {"$exists": True, "$ne": "", "$not": {"$regex": "^your_"}}
+                    })
+                    if provider_doc:
+                        logger.info(f"📊 MongoDB 找到有效 embedding provider: {provider_doc.get('name')}")
+                        return provider_doc
+
+            logger.info("📊 MongoDB 无 embedding provider")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ MongoDB 查询 embedding provider 失败: {e}")
+            return None
+
+    def _get_model_dimension(self) -> int:
+        """获取 embedding 模型维度"""
+        dim_map = {
+            "text-embedding-v3": 1024,
+            "text-embedding-3-small": 1536,
+            "text-embedding-3-large": 3072,
+            "bge-large-zh": 1024,
+            "bge-base-zh": 768,
+        }
+        return dim_map.get(self.embedding, 1024)
+
+    def _check_dimension_compatibility(self) -> bool:
+        """检查维度兼容性"""
+        try:
+            existing = self.situation_collection.peek(limit=1)
+            if existing and existing.get('embeddings') and len(existing['embeddings']) > 0:
+                existing_dim = len(existing['embeddings'][0])
+                if self.model_dimension != existing_dim:
+                    logger.warning(f"⚠️ 维度不匹配: 模型={self.model_dimension}, 集合={existing_dim}")
+                    logger.warning(f"💡 解决方案: 1) 重建集合 2) 切换到{existing_dim}维模型")
+                    return False
+            return True
+        except Exception as e:
+            logger.debug(f"📊 维度检查跳过: {e}")
+            return True
+
+    def _get_embeddings(self, texts):
+        """获取向量（批量调用）"""
+        if self._embedding_disabled:
+            raise RuntimeError("Embedding 功能已禁用")
+        
+        try:
+            # 使用阿里百炼
+            if (self.llm_provider == "dashscope" or
+                self.llm_provider == "alibaba" or
+                self.llm_provider == "qianfan" or
+                (self.llm_provider == "google" and self.client is None) or
+                (self.llm_provider == "deepseek" and self.client is None) or
+                (self.llm_provider == "openrouter" and self.client is None)):
+                return self._get_dashscope_embeddings(texts)
+            else:
+                return self._get_openai_embeddings(texts)
+        except Exception as e:
+            logger.error(f"❌ Embedding 调用失败: {e}")
+            raise
+
+    def _get_dashscope_embeddings(self, texts):
+        """阿里百炼 embedding（批量调用）"""
+        import dashscope
+        from dashscope import TextEmbedding
+        
+        # 批量调用，最多 25 条
+        batch_size = 25
+        all_embeddings = []
+        
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
+            response = TextEmbedding.call(
+                model=self.embedding,
+                input=batch
+            )
+            
+            if response.status_code == 200:
+                batch_embeddings = [item['embedding'] for item in response.output['embeddings']]
+                all_embeddings.extend(batch_embeddings)
+            else:
+                raise Exception(f"DashScope embedding failed: {response.message}")
+        
+        return all_embeddings
+
+    def _get_openai_embeddings(self, texts):
+        """OpenAI 兼容 embedding（批量调用）"""
+        response = self.client.embeddings.create(
+            model=self.embedding,
+            input=texts
+        )
+        return [item.embedding for item in response.data]
 
     def _smart_text_truncation(self, text, max_length=8192):
         """智能文本截断，保持语义完整性和缓存兼容性"""
@@ -352,7 +495,7 @@ class FinancialSituationMemory:
         """Get embedding for a text using the configured provider"""
 
         # 检查记忆功能是否被禁用
-        if self.client == "DISABLED":
+        if self._embedding_disabled:
             # 内存功能已禁用，返回空向量
             logger.debug(f"⚠️ 记忆功能已禁用，返回空向量")
             return [0.0] * 1024  # 返回1024维的零向量
@@ -496,7 +639,7 @@ class FinancialSituationMemory:
             if self.client is None:
                 logger.warning(f"⚠️ 嵌入客户端未初始化，返回空向量")
                 return [0.0] * 1024  # 返回空向量
-            elif self.client == "DISABLED":
+            elif self._embedding_disabled:
                 # 内存功能已禁用，返回空向量
                 logger.debug(f"⚠️ 内存功能已禁用，返回空向量")
                 return [0.0] * 1024  # 返回1024维的零向量
@@ -549,7 +692,7 @@ class FinancialSituationMemory:
             'max_embedding_length': self.max_embedding_length,
             'max_embedding_length_formatted': f"{self.max_embedding_length:,}字符",
             'provider': self.llm_provider,
-            'client_status': 'DISABLED' if self.client == "DISABLED" else 'ENABLED'
+            'client_status': 'DISABLED' if self._embedding_disabled else 'ENABLED'
         }
 
     def get_last_text_info(self):
@@ -558,7 +701,6 @@ class FinancialSituationMemory:
 
     def add_situations(self, situations_and_advice):
         """Add financial situations and their corresponding advice. Parameter is a list of tuples (situation, rec)"""
-
         situations = []
         advice = []
         ids = []
@@ -572,12 +714,16 @@ class FinancialSituationMemory:
             ids.append(str(offset + i))
             embeddings.append(self.get_embedding(situation))
 
-        self.situation_collection.add(
-            documents=situations,
-            metadatas=[{"recommendation": rec} for rec in advice],
-            embeddings=embeddings,
-            ids=ids,
-        )
+        try:
+            self.situation_collection.add(
+                documents=situations,
+                metadatas=[{"recommendation": rec} for rec in advice],
+                embeddings=embeddings,
+                ids=ids,
+            )
+        except Exception as e:
+            logger.error(f"❌ 添加记忆失败: {e}")
+            # 不 raise：记忆写入失败不应中断反思流程，后续 agent 仍需完成反思
 
     def get_memories(self, current_situation, n_matches=1):
         """Find matching recommendations using embeddings with smart truncation handling"""
@@ -643,7 +789,7 @@ class FinancialSituationMemory:
         """获取缓存相关信息，用于调试和监控"""
         info = {
             'collection_count': self.situation_collection.count(),
-            'client_status': 'enabled' if self.client != "DISABLED" else 'disabled',
+            'client_status': 'enabled' if not self._embedding_disabled else 'disabled',
             'embedding_model': self.embedding,
             'provider': self.llm_provider
         }
