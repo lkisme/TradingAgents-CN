@@ -575,11 +575,11 @@ class SimpleAnalysisService:
         # 🔧 创建共享的线程池，支持并发执行多个分析任务
         # 默认最多同时执行3个分析任务（可根据服务器资源调整）
         import concurrent.futures
-        self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        self._thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=7)
 
         logger.info(f"🔧 [服务初始化] SimpleAnalysisService 实例ID: {id(self)}")
         logger.info(f"🔧 [服务初始化] 内存管理器实例ID: {id(self.memory_manager)}")
-        logger.info(f"🔧 [服务初始化] 线程池最大并发数: 3")
+        logger.info(f"🔧 [服务初始化] 线程池最大并发数: 7")
 
         # 设置 WebSocket 管理器
         # 简单的股票名称缓存，减少重复查询
