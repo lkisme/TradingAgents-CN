@@ -15,6 +15,7 @@ from tradingagents.agents import (
     create_neutral_debator,
     create_research_manager,
     create_risk_manager,
+    create_risk_manager_structured,
     create_risky_debator,
     create_safe_debator,
     create_social_media_analyst,
@@ -47,6 +48,7 @@ class GraphSetup:
         conditional_logic: ConditionalLogic,
         config: Dict[str, Any] = None,
         react_llm = None,
+        supports_structured_output: bool = False,
     ):
         """Initialize with required components."""
         self.quick_thinking_llm = quick_thinking_llm
@@ -61,6 +63,7 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
         self.config = config or {}
         self.react_llm = react_llm
+        self.supports_structured_output = supports_structured_output
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -166,9 +169,18 @@ class GraphSetup:
         risky_analyst = create_risky_debator(self.quick_thinking_llm)
         neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
         safe_analyst = create_safe_debator(self.quick_thinking_llm)
-        risk_manager_node = create_risk_manager(
-            self.deep_thinking_llm, self.risk_manager_memory
-        )
+
+        # Choose risk manager based on structured output capability
+        if self.supports_structured_output:
+            logger.info(f"🔧 [GraphSetup] Using structured Risk Manager")
+            risk_manager_node = create_risk_manager_structured(
+                self.deep_thinking_llm, self.risk_manager_memory
+            )
+        else:
+            logger.info(f"🔧 [GraphSetup] Using standard Risk Manager")
+            risk_manager_node = create_risk_manager(
+                self.deep_thinking_llm, self.risk_manager_memory
+            )
 
         # Create workflow
         workflow = StateGraph(AgentState)

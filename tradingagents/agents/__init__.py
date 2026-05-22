@@ -23,6 +23,7 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "create_safe_debator": ("tradingagents.agents.risk_mgmt.conservative_debator", "create_safe_debator"),
     "create_neutral_debator": ("tradingagents.agents.risk_mgmt.neutral_debator", "create_neutral_debator"),
     "create_risk_manager": ("tradingagents.agents.managers.risk_manager", "create_risk_manager"),
+    "create_risk_manager_structured": ("tradingagents.agents.managers.risk_manager", "create_risk_manager_structured"),
     "create_trader": ("tradingagents.agents.trader.trader", "create_trader"),
 }
 
@@ -42,6 +43,7 @@ __all__ = [
     "create_news_analyst",
     "create_risky_debator",
     "create_risk_manager",
+    "create_risk_manager_structured",
     "create_safe_debator",
     "create_social_media_analyst",
     "create_trader",
