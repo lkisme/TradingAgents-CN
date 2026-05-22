@@ -84,3 +84,6 @@ class AgentState(MessagesState):
         RiskDebateState, "Current state of the debate on evaluating risk"
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
+    structured_trade_decision: Annotated[
+        Optional[dict], "Structured decision dict, populated when provider supports structured output"
+    ]
