@@ -16,23 +16,16 @@ def create_safe_debator(llm):
         current_risky_response = risk_debate_state.get("current_risky_response", "")
         current_neutral_response = risk_debate_state.get("current_neutral_response", "")
 
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
 
         trader_decision = state["trader_investment_plan"]
 
         # 📊 记录输入数据长度
         logger.info(f"📊 [Safe Analyst] 输入数据长度统计:")
-        logger.info(f"  - market_report: {len(market_research_report):,} 字符")
-        logger.info(f"  - sentiment_report: {len(sentiment_report):,} 字符")
-        logger.info(f"  - news_report: {len(news_report):,} 字符")
-        logger.info(f"  - fundamentals_report: {len(fundamentals_report):,} 字符")
+        logger.info(f"  - combined_report_summary: {len(combined_report_summary):,} 字符")
         logger.info(f"  - trader_decision: {len(trader_decision):,} 字符")
         logger.info(f"  - history: {len(history):,} 字符")
-        total_length = (len(market_research_report) + len(sentiment_report) +
-                       len(news_report) + len(fundamentals_report) +
+        total_length = (len(combined_report_summary) +
                        len(trader_decision) + len(history) +
                        len(current_risky_response) + len(current_neutral_response))
         logger.info(f"  - 总Prompt长度: {total_length:,} 字符 (~{total_length//4:,} tokens)")
@@ -43,10 +36,7 @@ def create_safe_debator(llm):
 
 您的任务是积极反驳激进和中性分析师的论点，突出他们的观点可能忽视的潜在威胁或未能优先考虑可持续性的地方。直接回应他们的观点，利用以下数据来源为交易员决策的低风险方法调整建立令人信服的案例：
 
-市场研究报告：{market_research_report}
-社交媒体情绪报告：{sentiment_report}
-最新世界事务报告：{news_report}
-公司基本面报告：{fundamentals_report}
+综合分析摘要：{combined_report_summary}
 以下是当前对话历史：{history} 以下是激进分析师的最后回应：{current_risky_response} 以下是中性分析师的最后回应：{current_neutral_response}。如果其他观点没有回应，请不要虚构，只需提出您的观点。
 
 通过质疑他们的乐观态度并强调他们可能忽视的潜在下行风险来参与讨论。解决他们的每个反驳点，展示为什么保守立场最终是公司资产最安全的道路。专注于辩论和批评他们的论点，证明低风险策略相对于他们方法的优势。请用中文以对话方式输出，就像您在说话一样，不使用任何特殊格式。"""
