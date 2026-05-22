@@ -15,23 +15,16 @@ def create_risky_debator(llm):
         current_safe_response = risk_debate_state.get("current_safe_response", "")
         current_neutral_response = risk_debate_state.get("current_neutral_response", "")
 
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
 
         trader_decision = state["trader_investment_plan"]
 
         # 📊 记录输入数据长度
         logger.info(f"📊 [Risky Analyst] 输入数据长度统计:")
-        logger.info(f"  - market_report: {len(market_research_report):,} 字符")
-        logger.info(f"  - sentiment_report: {len(sentiment_report):,} 字符")
-        logger.info(f"  - news_report: {len(news_report):,} 字符")
-        logger.info(f"  - fundamentals_report: {len(fundamentals_report):,} 字符")
+        logger.info(f"  - combined_report_summary: {len(combined_report_summary):,} 字符")
         logger.info(f"  - trader_decision: {len(trader_decision):,} 字符")
         logger.info(f"  - history: {len(history):,} 字符")
-        total_length = (len(market_research_report) + len(sentiment_report) +
-                       len(news_report) + len(fundamentals_report) +
+        total_length = (len(combined_report_summary) +
                        len(trader_decision) + len(history) +
                        len(current_safe_response) + len(current_neutral_response))
         logger.info(f"  - 总Prompt长度: {total_length:,} 字符 (~{total_length//4:,} tokens)")
@@ -42,10 +35,7 @@ def create_risky_debator(llm):
 
 您的任务是通过质疑和批评保守和中性立场来为交易员的决策创建一个令人信服的案例，证明为什么您的高回报视角提供了最佳的前进道路。将以下来源的见解纳入您的论点：
 
-市场研究报告：{market_research_report}
-社交媒体情绪报告：{sentiment_report}
-最新世界事务报告：{news_report}
-公司基本面报告：{fundamentals_report}
+综合分析摘要：{combined_report_summary}
 以下是当前对话历史：{history} 以下是保守分析师的最后论点：{current_safe_response} 以下是中性分析师的最后论点：{current_neutral_response}。如果其他观点没有回应，请不要虚构，只需提出您的观点。
 
 积极参与，解决提出的任何具体担忧，反驳他们逻辑中的弱点，并断言承担风险的好处以超越市场常规。专注于辩论和说服，而不仅仅是呈现数据。挑战每个反驳点，强调为什么高风险方法是最优的。请用中文以对话方式输出，就像您在说话一样，不使用任何特殊格式。"""
