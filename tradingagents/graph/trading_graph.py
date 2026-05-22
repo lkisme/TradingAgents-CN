@@ -34,6 +34,7 @@ from .setup import GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
+from tradingagents.agents.utils.trade_decision import TradeDecision
 
 
 def create_llm_by_provider(provider: str, model: str, backend_url: str, temperature: float, max_tokens: int, timeout: int, api_key: str = None, **extra_kwargs):
@@ -573,6 +574,9 @@ class TradingAgentsGraph:
         logger.info(f"   - max_debate_rounds: {self.conditional_logic.max_debate_rounds}")
         logger.info(f"   - max_risk_discuss_rounds: {self.conditional_logic.max_risk_discuss_rounds}")
 
+        # Detect structured output capability
+        self._supports_structured_output = self._probe_structured_output(self.deep_thinking_llm)
+
         self.graph_setup = GraphSetup(
             self.quick_thinking_llm,
             self.deep_thinking_llm,
@@ -586,6 +590,7 @@ class TradingAgentsGraph:
             self.conditional_logic,
             self.config,
             getattr(self, 'react_llm', None),
+            supports_structured_output=self._supports_structured_output,
         )
 
         self.propagator = Propagator()
@@ -657,6 +662,23 @@ class TradingAgentsGraph:
                 ]
             ),
         }
+
+    def _probe_structured_output(self, llm) -> bool:
+        """Check if LLM provider supports structured output.
+
+        This is a no-network-call check - with_structured_output() only
+        constructs a binding object, doesn't invoke the LLM.
+
+        Returns:
+            True if provider supports structured output, False otherwise
+        """
+        try:
+            llm.with_structured_output(TradeDecision)
+            logger.info(f"✅ [TradingGraph] Provider supports structured output")
+            return True
+        except (NotImplementedError, AttributeError) as e:
+            logger.info(f"⚠️ [TradingGraph] Provider does not support structured output: {e}")
+            return False
 
     def propagate(self, company_name, trade_date, progress_callback=None, task_id=None):
         """Run the trading agents graph for a company on a specific date.
@@ -849,8 +871,18 @@ class TradingAgentsGraph:
         except Exception:
             model_info = "Unknown"
 
-        # 处理决策并添加模型信息
-        decision = self.process_signal(final_state["final_trade_decision"], company_name)
+        # Add progress callback for signal processing (fixes existing bug)
+        if progress_callback:
+            progress_callback("📡 信号处理")
+
+        # Use structured decision if available, otherwise parse
+        if final_state.get("structured_trade_decision"):
+            decision = final_state["structured_trade_decision"]
+            logger.info(f"✅ [Propagate] 使用结构化决策输出")
+        else:
+            decision = self.process_signal(final_state["final_trade_decision"], company_name)
+            logger.info(f"⚠️ [Propagate] 使用SignalProcessor解析")
+
         decision['model_info'] = model_info
 
         # Return decision and processed signal
