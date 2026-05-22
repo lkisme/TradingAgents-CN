@@ -20,6 +20,7 @@ from tradingagents.agents import (
     create_safe_debator,
     create_social_media_analyst,
     create_trader,
+    create_report_summarizer,
 )
 from tradingagents.agents.utils.agent_states import AgentState
 from tradingagents.agents.utils.agent_utils import Toolkit
@@ -49,6 +50,7 @@ class GraphSetup:
         config: Dict[str, Any] = None,
         react_llm = None,
         supports_structured_output: bool = False,
+        convergence_llm = None,
     ):
         """Initialize with required components."""
         self.quick_thinking_llm = quick_thinking_llm
@@ -64,6 +66,7 @@ class GraphSetup:
         self.config = config or {}
         self.react_llm = react_llm
         self.supports_structured_output = supports_structured_output
+        self.convergence_llm = convergence_llm
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -154,6 +157,7 @@ class GraphSetup:
             tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
 
         # Create researcher and manager nodes
+        report_summarizer_node = create_report_summarizer(self.quick_thinking_llm)
         bull_researcher_node = create_bull_researcher(
             self.quick_thinking_llm, self.bull_memory
         )
@@ -194,6 +198,7 @@ class GraphSetup:
             workflow.add_node(f"tools_{analyst_type}", tool_nodes[analyst_type])
 
         # Add other nodes
+        workflow.add_node("Report Summarizer", report_summarizer_node)
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
         workflow.add_node("Research Manager", research_manager_node)
@@ -222,12 +227,15 @@ class GraphSetup:
             )
             workflow.add_edge(current_tools, current_analyst)
 
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
+            # Connect to next analyst or to Report Summarizer if this is the last analyst
             if i < len(selected_analysts) - 1:
                 next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
                 workflow.add_edge(current_clear, next_analyst)
             else:
-                workflow.add_edge(current_clear, "Bull Researcher")
+                workflow.add_edge(current_clear, "Report Summarizer")
+
+        # Connect Report Summarizer to Bull Researcher
+        workflow.add_edge("Report Summarizer", "Bull Researcher")
 
         # Add remaining edges
         workflow.add_conditional_edges(
