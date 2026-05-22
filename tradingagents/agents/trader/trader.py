@@ -52,7 +52,7 @@ def create_trader(llm, memory):
 
         context = {
             "role": "user",
-            "content": f"Based on a comprehensive analysis by a team of analysts, here is an investment plan tailored for {company_name}. This plan incorporates insights from current technical market trends, macroeconomic indicators, and social media sentiment. Use this plan as a foundation for evaluating your next trading decision.\n\nProposed Investment Plan: {investment_plan}\n\nLeverage these insights to make an informed and strategic decision.",
+            "content": f"以下是分析师团队为 {company_name} 制定的投资计划，综合了技术面、宏观经济指标和市场情绪分析。请以此为基础，结合你的独立判断做出交易决策。\n\n投资计划：{investment_plan}\n\n请注意：投资计划中的目标价格仅供参考，请基于你自己的分析独立给出目标价位。",
         }
 
         messages = [
