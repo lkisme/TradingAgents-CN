@@ -16,13 +16,10 @@ def create_risk_manager(llm, memory):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
-        market_research_report = state["market_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
-        sentiment_report = state["sentiment_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
         trader_plan = state["trader_investment_plan"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = combined_report_summary
 
         # 安全检查：确保memory不为None
         if memory is not None:
@@ -46,6 +43,10 @@ def create_risk_manager(llm, memory):
 交付成果：
 - 明确且可操作的建议：买入、卖出或持有。
 - 基于辩论和过去反思的详细推理。
+- 具体目标价格：必须给出明确的数值或区间（如 XX 元或 XX-XX 元），不允许回复"无法确定"或"需要更多信息"。
+
+综合分析摘要：
+{combined_report_summary}
 
 标的约束：
 {instrument_context}
@@ -183,13 +184,10 @@ def create_risk_manager_structured(llm, memory):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
-        market_research_report = state["market_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
-        sentiment_report = state["sentiment_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
         trader_plan = state["trader_investment_plan"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = combined_report_summary
 
         # Memory lookup
         if memory is not None:
@@ -214,6 +212,10 @@ def create_risk_manager_structured(llm, memory):
 交付成果：
 - 明确且可操作的建议：买入、卖出或持有。
 - 基于辩论和过去反思的详细推理。
+- 具体目标价格：必须给出明确的数值或区间（如 XX 元或 XX-XX 元），不允许回复"无法确定"或"需要更多信息"。
+
+综合分析摘要：
+{combined_report_summary}
 
 标的约束：
 {instrument_context}
