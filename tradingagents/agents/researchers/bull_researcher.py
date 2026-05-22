@@ -16,10 +16,7 @@ def create_bull_researcher(llm, memory):
         bull_history = investment_debate_state.get("bull_history", "")
 
         current_response = investment_debate_state.get("current_response", "")
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
 
         # 使用统一的股票类型检测（仅用于货币显示）
         ticker = state.get('company_of_interest', 'Unknown')
@@ -33,16 +30,12 @@ def create_bull_researcher(llm, memory):
         currency = market_info['currency_name']
         currency_symbol = market_info['currency_symbol']
 
-        logger.debug(f"🐂 [DEBUG] 接收到的报告:")
-        logger.debug(f"🐂 [DEBUG] - 市场报告长度: {len(market_research_report)}")
-        logger.debug(f"🐂 [DEBUG] - 情绪报告长度: {len(sentiment_report)}")
-        logger.debug(f"🐂 [DEBUG] - 新闻报告长度: {len(news_report)}")
-        logger.debug(f"🐂 [DEBUG] - 基本面报告长度: {len(fundamentals_report)}")
-        logger.debug(f"🐂 [DEBUG] - 基本面报告前200字符: {fundamentals_report[:200]}...")
+        logger.debug(f"🐂 [DEBUG] 接收到的摘要:")
+        logger.debug(f"🐂 [DEBUG] - 综合摘要长度: {len(combined_report_summary)}")
         logger.debug(f"🐂 [DEBUG] - 股票代码: {ticker}, 公司名称: {company_name}, 类型: {market_info['market_name']}, 货币: {currency}")
         logger.debug(f"🐂 [DEBUG] - 市场详情: 中国A股={is_china}, 港股={is_hk}, 美股={is_us}")
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = combined_report_summary
 
         # 安全检查：确保memory不为None
         if memory is not None:
@@ -70,10 +63,7 @@ def create_bull_researcher(llm, memory):
 - 参与讨论：以对话风格呈现你的论点，直接回应看跌分析师的观点并进行有效辩论，而不仅仅是列举数据
 
 可用资源：
-市场研究报告：{market_research_report}
-社交媒体情绪报告：{sentiment_report}
-最新世界事务新闻：{news_report}
-公司基本面报告：{fundamentals_report}
+综合分析摘要：{combined_report_summary}
 辩论对话历史：{history}
 最后的看跌论点：{current_response}
 类似情况的反思和经验教训：{past_memory_str}
