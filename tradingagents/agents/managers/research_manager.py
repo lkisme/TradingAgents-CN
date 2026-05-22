@@ -12,14 +12,11 @@ def create_research_manager(llm, memory):
         ticker = state["company_of_interest"]
         instrument_context = build_instrument_context(ticker)
         history = state["investment_debate_state"].get("history", "")
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
 
         investment_debate_state = state["investment_debate_state"]
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = combined_report_summary
 
         # 安全检查：确保memory不为None
         if memory is not None:
@@ -41,14 +38,7 @@ def create_research_manager(llm, memory):
 您的建议：基于最有说服力论点的明确立场。
 理由：解释为什么这些论点导致您的结论。
 战略行动：实施建议的具体步骤。
-📊 目标价格分析：基于所有可用报告（基本面、新闻、情绪），提供全面的目标价格区间和具体价格目标。考虑：
-- 基本面报告中的基本估值
-- 新闻对价格预期的影响
-- 情绪驱动的价格调整
-- 技术支撑/阻力位
-- 风险调整价格情景（保守、基准、乐观）
-- 价格目标的时间范围（1个月、3个月、6个月）
-💰 您必须提供具体的目标价格 - 不要回复"无法确定"或"需要更多信息"。
+📊 参考价格区间：基于综合分析摘要，提供合理的价格参考区间（如 XX-XX 元），供交易员参考。无需精确到具体数值，后续由交易员和风险经理进一步细化。
 
 考虑您在类似情况下的过去错误。利用这些见解来完善您的决策制定，确保您在学习和改进。以对话方式呈现您的分析，就像自然说话一样，不使用特殊格式。
 
@@ -58,14 +48,8 @@ def create_research_manager(llm, memory):
 标的约束：
 {instrument_context}
 
-以下是综合分析报告：
-市场研究：{market_research_report}
-
-情绪分析：{sentiment_report}
-
-新闻分析：{news_report}
-
-基本面分析：{fundamentals_report}
+以下是综合分析摘要：
+{combined_report_summary}
 
 以下是辩论：
 辩论历史：
