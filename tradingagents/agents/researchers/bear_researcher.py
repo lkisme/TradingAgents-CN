@@ -14,10 +14,7 @@ def create_bear_researcher(llm, memory):
         bear_history = investment_debate_state.get("bear_history", "")
 
         current_response = investment_debate_state.get("current_response", "")
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        combined_report_summary = state.get("combined_report_summary", "")
 
         # 使用统一的股票类型检测（仅用于货币显示）
         ticker = state.get('company_of_interest', 'Unknown')
@@ -28,7 +25,7 @@ def create_bear_researcher(llm, memory):
         currency = market_info['currency_name']
         currency_symbol = market_info['currency_symbol']
 
-        curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
+        curr_situation = combined_report_summary
 
         # 安全检查：确保memory不为None
         if memory is not None:
@@ -58,10 +55,7 @@ def create_bear_researcher(llm, memory):
 
 可用资源：
 
-市场研究报告：{market_research_report}
-社交媒体情绪报告：{sentiment_report}
-最新世界事务新闻：{news_report}
-公司基本面报告：{fundamentals_report}
+综合分析摘要：{combined_report_summary}
 辩论对话历史：{history}
 最后的看涨论点：{current_response}
 类似情况的反思和经验教训：{past_memory_str}
