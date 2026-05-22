@@ -1,5 +1,4 @@
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class TradeDecision(BaseModel):
@@ -8,9 +7,8 @@ class TradeDecision(BaseModel):
     action: str = Field(
         description="买入、持有或卖出之一"
     )
-    target_price: Optional[float] = Field(
-        default=None,
-        description="目标价格数值，无法确定时为null"
+    target_price: float = Field(
+        description="目标价格数值，必须提供具体数值，不允许为null"
     )
     confidence: float = Field(
         default=0.7,
