@@ -568,7 +568,8 @@ class TradingAgentsGraph:
         # 🔥 [修复] 从配置中读取辩论轮次参数
         self.conditional_logic = ConditionalLogic(
             max_debate_rounds=self.config.get("max_debate_rounds", 1),
-            max_risk_discuss_rounds=self.config.get("max_risk_discuss_rounds", 1)
+            max_risk_discuss_rounds=self.config.get("max_risk_discuss_rounds", 1),
+            convergence_llm=self.quick_thinking_llm  # 用于收敛判断
         )
         logger.info(f"🔧 [ConditionalLogic] 初始化完成:")
         logger.info(f"   - max_debate_rounds: {self.conditional_logic.max_debate_rounds}")
@@ -591,6 +592,7 @@ class TradingAgentsGraph:
             self.config,
             getattr(self, 'react_llm', None),
             supports_structured_output=self._supports_structured_output,
+            convergence_llm=self.quick_thinking_llm,  # 用于收敛判断
         )
 
         self.propagator = Propagator()
