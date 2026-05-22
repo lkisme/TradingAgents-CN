@@ -25,6 +25,7 @@ _EXPORTS: Dict[str, Tuple[str, str]] = {
     "create_risk_manager": ("tradingagents.agents.managers.risk_manager", "create_risk_manager"),
     "create_risk_manager_structured": ("tradingagents.agents.managers.risk_manager", "create_risk_manager_structured"),
     "create_trader": ("tradingagents.agents.trader.trader", "create_trader"),
+    "create_report_summarizer": ("tradingagents.agents.summarizer.report_summarizer", "create_report_summarizer"),
 }
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     "create_safe_debator",
     "create_social_media_analyst",
     "create_trader",
+    "create_report_summarizer",
 ]
 
 
