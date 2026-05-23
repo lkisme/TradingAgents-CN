@@ -1294,13 +1294,14 @@ class Toolkit:
         """
         统一的股票情绪分析工具
         自动识别股票类型（A股、港股、美股）并调用相应的情绪数据源
+        对于中国A股，获取东方财富股吧真实情绪指数和财经新闻（带全局限流）
 
         Args:
             ticker: 股票代码（如：000001、0700.HK、AAPL）
             curr_date: 当前日期（格式：YYYY-MM-DD）
 
         Returns:
-            str: 情绪分析报告
+            str: 情绪分析报告（包含情绪指数、解读系数说明、财经新闻）
         """
         logger.info(f"😊 [统一情绪工具] 分析股票: {ticker}")
 
@@ -1317,34 +1318,147 @@ class Toolkit:
 
             result_data = []
 
-            if is_china or is_hk:
-                # 中国A股和港股：使用社交媒体情绪分析
-                logger.info(f"🇨🇳🇭🇰 [统一情绪工具] 处理中文市场情绪...")
+            if is_china:
+                # 中国A股：通过AKShareProvider获取情绪指数和财经新闻（带全局限流）
+                logger.info(f"🇨🇳 [统一情绪工具] 获取A股情绪数据...")
+
+                # 标准化股票代码（去除后缀）
+                clean_code = ticker.replace('.SH', '').replace('.SZ', '').replace('.BJ', '').zfill(6)
 
                 try:
-                    # 可以集成微博、雪球、东方财富等中文社交媒体情绪
-                    # 目前使用基础的情绪分析
+                    # 使用AKShareProvider统一获取数据（内置全局限流）
+                    from tradingagents.dataflows.providers.china.akshare import get_akshare_provider
+                    provider = get_akshare_provider()
+                    data = provider._get_sentiment_indices(clean_code)
+
+                    # 解析返回数据
+                    sentiment_indices = data.get('sentiment', {})
+                    news_list = data.get('news', [])
+
+                    # 解读情绪指数
+                    def interpret_desire(value):
+                        if value is None:
+                            return "数据缺失"
+                        if value >= 50:
+                            return "高活跃（散户讨论热烈）"
+                        elif value >= 30:
+                            return "中等活跃"
+                        else:
+                            return "低活跃（关注度不足）"
+
+                    def interpret_focus(value):
+                        if value is None:
+                            return "数据缺失"
+                        if value >= 80:
+                            return "热点股（市场高度关注）"
+                        elif value >= 70:
+                            return "关注度正常"
+                        else:
+                            return "关注度下降"
+
+                    def interpret_evaluation(value):
+                        if value is None:
+                            return "数据缺失"
+                        if value >= 70:
+                            return "偏乐观（投资者情绪向好）"
+                        elif value >= 60:
+                            return "中性"
+                        else:
+                            return "偏悲观"
+
+                    def interpret_institution(value):
+                        if value is None:
+                            return "数据缺失"
+                        if value >= 40:
+                            return "机构活跃（专业投资者参与度高）"
+                        elif value >= 30:
+                            return "机构参与度正常"
+                        else:
+                            return "散户主导（机构关注度低）"
+
+                    # 获取各指标值
+                    desire_val = sentiment_indices.get('desire', {}).get('value')
+                    desire_change = sentiment_indices.get('desire', {}).get('change')
+                    desire_avg_5d = sentiment_indices.get('desire', {}).get('avg_5d')
+                    focus_val = sentiment_indices.get('focus', {}).get('value')
+                    eval_val = sentiment_indices.get('evaluation', {}).get('value')
+                    inst_val = sentiment_indices.get('institution', {}).get('value')
+
+                    # 组合解读
+                    combination_analysis = ""
+                    if focus_val and desire_val:
+                        if focus_val >= 80 and desire_val < 30:
+                            combination_analysis = "- **高关注 + 低参与** = 观望态度（市场关注但不愿参与，可能等待更明确信号）\n"
+                        elif desire_val >= 50 and inst_val and inst_val < 30:
+                            combination_analysis = "- **高参与意愿 + 低机构参与** = 散户主导行情，需关注持续性风险\n"
+                        elif inst_val and inst_val >= 40 and eval_val and eval_val >= 70:
+                            combination_analysis = "- **机构活跃 + 综合评价乐观** = 专业投资者看好，可能有基本面支撑\n"
+
+                    # 格式化输出
+                    desire_change_str = ""
+                    if desire_change is not None and desire_avg_5d is not None:
+                        desire_change_str = f"**参与意愿变化**: {desire_change:+.2f}，5日均值: {desire_avg_5d:.2f}"
+
                     sentiment_summary = f"""
-## 中文市场情绪分析
+## 东方财富股吧情绪分析
 
 **股票**: {ticker} ({market_info['market_name']})
 **分析日期**: {curr_date}
+**股票代码**: {clean_code}
+
+### 情绪指数数据
+
+| 指标 | 当前值 | 数据解读 |
+|------|--------|----------|
+| 参与意愿指数 | {desire_val if desire_val else 'N/A'} | {interpret_desire(desire_val)} |
+| 关注度指数 | {focus_val if focus_val else 'N/A'} | {interpret_focus(focus_val)} |
+| 综合评价评分 | {eval_val if eval_val else 'N/A'} | {interpret_evaluation(eval_val)} |
+| 机构参与度 | {inst_val if inst_val else 'N/A'} | {interpret_institution(inst_val)} |
+
+{desire_change_str}
+
+### 数据解读系数说明
+
+| 指标 | 数值范围 | 高值含义（阈值） | 低值含义（阈值） |
+|------|----------|------------------|------------------|
+| **参与意愿** | 0-100 | 50+: 散户讨论热烈，市场活跃度高 | 30以下: 活跃度低，关注度不足 |
+| **关注度** | 60-100 | 80+: 热点股，市场高度关注 | 70以下: 关注度下降，热度减弱 |
+| **综合评价** | 50-80 | 70+: 投资者情绪偏乐观 | 50-60: 偏悲观，需关注风险 |
+| **机构参与度** | 20-60 | 40+: 机构投资者活跃，专业资金参与 | 30以下: 散户主导，机构关注度低 |
+
+### 特殊组合解读
+
+{combination_analysis if combination_analysis else "- 当前情绪组合无明显特殊信号，建议综合各指标判断"}
+
+### 财经新闻摘要（{len(news_list)}条）
+
+"""
+                    # 添加新闻内容
+                    for i, news in enumerate(news_list, 1):
+                        sentiment_summary += f"{i}. **{news['title']}**\n   {news['content']}...\n   来源: {news['source']} | 时间: {news['time']}\n\n"
+
+                    result_data.append(sentiment_summary)
+                    logger.info(f"✅ [统一情绪工具] A股情绪数据获取完成")
+
+                except Exception as e:
+                    logger.error(f"❌ [统一情绪工具] A股情绪数据获取失败: {e}")
+                    result_data.append(f"## A股情绪分析\n获取失败: {e}")
+
+            elif is_hk:
+                # 港股：暂无完整数据源
+                result_data.append(f"""
+## 港股市场情绪分析
+
+**股票**: {ticker}
+**分析日期**: {curr_date}
 
 ### 市场情绪概况
-- 由于中文社交媒体情绪数据源暂未完全集成，当前提供基础分析
-- 建议关注雪球、东方财富、同花顺等平台的讨论热度
-- 港股市场还需关注香港本地财经媒体情绪
+- 港股社交媒体情绪数据源暂未完全集成
+- 建议关注香港本地财经媒体情绪和交易活跃度
+- 可参考恒生指数成分股的市场关注度
 
-### 情绪指标
-- 整体情绪: 中性
-- 讨论热度: 待分析
-- 投资者信心: 待评估
-
-*注：完整的中文社交媒体情绪分析功能正在开发中*
-"""
-                    result_data.append(sentiment_summary)
-                except Exception as e:
-                    result_data.append(f"## 中文市场情绪\n获取失败: {e}")
+*注：完整的港股情绪分析功能正在开发中*
+""")
 
             else:
                 # 美股：使用Reddit情绪分析
@@ -1359,7 +1473,7 @@ class Toolkit:
                     result_data.append(f"## 美股Reddit情绪\n获取失败: {e}")
 
             # 组合所有数据
-            combined_result = f"""# {ticker} 情绪分析
+            combined_result = f"""# {ticker} 情绪分析报告
 
 **股票类型**: {market_info['market_name']}
 **分析日期**: {curr_date}
@@ -1367,7 +1481,7 @@ class Toolkit:
 {chr(10).join(result_data)}
 
 ---
-*数据来源: 根据股票类型自动选择最适合的情绪数据源*
+*数据来源: 东方财富股吧情绪指数、财经新闻（自动选择最适合的情绪数据源）*
 """
 
             logger.info(f"😊 [统一情绪工具] 数据获取完成，总长度: {len(combined_result)}")

@@ -174,17 +174,13 @@ class GraphSetup:
         neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
         safe_analyst = create_safe_debator(self.quick_thinking_llm)
 
-        # Choose risk manager based on structured output capability
-        if self.supports_structured_output:
-            logger.info(f"🔧 [GraphSetup] Using structured Risk Manager")
-            risk_manager_node = create_risk_manager_structured(
-                self.deep_thinking_llm, self.risk_manager_memory
-            )
-        else:
-            logger.info(f"🔧 [GraphSetup] Using standard Risk Manager")
-            risk_manager_node = create_risk_manager(
-                self.deep_thinking_llm, self.risk_manager_memory
-            )
+        # Choose risk manager - temporarily disable structured output
+        # Structured output has validation issues (action/target_price missing)
+        # Always use standard Risk Manager for reliable text output
+        logger.info(f"🔧 [GraphSetup] Using standard Risk Manager (structured output disabled)")
+        risk_manager_node = create_risk_manager(
+            self.deep_thinking_llm, self.risk_manager_memory
+        )
 
         # Create workflow
         workflow = StateGraph(AgentState)

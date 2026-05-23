@@ -200,8 +200,8 @@ def create_risk_manager_structured(llm, memory):
         for i, rec in enumerate(past_memories, 1):
             past_memory_str += rec["recommendation"] + "\n\n"
 
-        # Same prompt as regular risk_manager
-        prompt = f"""作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。只有在有具体论据强烈支持时才选择持有，而不是在所有方面都似乎有效时作为后备选择。力求清晰和果断。
+        # Same prompt as regular risk_manager, with JSON format hint for structured output
+        prompt = f"""请以JSON格式输出您的交易决策。作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。只有在有具体论据强烈支持时才选择持有，而不是在所有方面都似乎有效时作为后备选择。力求清晰和果断。
 
 决策指导原则：
 1. **总结关键论点**：提取每位分析师的最强观点，重点关注与背景的相关性。
@@ -258,18 +258,79 @@ def create_risk_manager_structured(llm, memory):
 
         except Exception as e:
             logger.error(f"❌ [Risk Manager Structured] 结构化输出失败: {e}")
-            # Fallback to default decision
+            logger.info(f"📊 [Risk Manager Structured] 降级到普通模式，使用标准LLM调用生成完整分析...")
+
+            # 降级处理：调用普通模式的LLM生成完整分析报告
+            # 复用 create_risk_manager 的完整逻辑
+            max_retries = 3
+            retry_count = 0
+            response_content = ""
+
+            while retry_count < max_retries:
+                try:
+                    logger.info(f"🔄 [Risk Manager Structured -> Fallback] 调用LLM生成交易决策 (尝试 {retry_count + 1}/{max_retries})")
+                    start_time = time.time()
+
+                    # 使用普通LLM调用（不使用结构化输出）
+                    response = llm.invoke(prompt)
+
+                    elapsed_time = time.time() - start_time
+
+                    if response and hasattr(response, 'content') and response.content:
+                        response_content = response.content.strip()
+                        response_length = len(response_content)
+
+                        logger.info(f"⏱️ [Risk Manager Structured -> Fallback] LLM调用耗时: {elapsed_time:.2f}秒")
+                        logger.info(f"📊 [Risk Manager Structured -> Fallback] 响应统计: {response_length} 字符")
+
+                        if len(response_content) > 10:
+                            logger.info(f"✅ [Risk Manager Structured -> Fallback] LLM调用成功，生成完整分析")
+                            break
+                        else:
+                            logger.warning(f"⚠️ [Risk Manager Structured -> Fallback] LLM响应内容过短: {len(response_content)} 字符")
+                            response_content = ""
+                    else:
+                        logger.warning(f"⚠️ [Risk Manager Structured -> Fallback] LLM响应为空或无效")
+                        response_content = ""
+
+                except Exception as fallback_e:
+                    elapsed_time = time.time() - start_time
+                    logger.error(f"❌ [Risk Manager Structured -> Fallback] LLM调用失败 (尝试 {retry_count + 1}): {str(fallback_e)}")
+                    response_content = ""
+
+                retry_count += 1
+                if retry_count < max_retries and not response_content:
+                    logger.info(f"🔄 [Risk Manager Structured -> Fallback] 等待2秒后重试...")
+                    time.sleep(2)
+
+            # 如果降级模式的LLM调用也全部失败，才使用默认决策
+            if not response_content:
+                logger.error(f"❌ [Risk Manager Structured -> Fallback] 所有LLM调用尝试失败，使用默认决策")
+                response_content = f"""**默认建议：持有**
+
+由于技术原因无法生成详细分析，基于当前市场状况和风险控制原则，建议对{company_name}采取持有策略。
+
+**理由：**
+1. 市场信息不足，避免盲目操作
+2. 保持现有仓位，等待更明确的市场信号
+3. 控制风险，避免在不确定性高的情况下做出激进决策
+
+**建议：**
+- 密切关注市场动态和公司基本面变化
+- 设置合理的止损和止盈位
+- 等待更好的入场或出场时机
+
+注意：此为系统默认建议，建议结合人工分析做出最终决策。原因：结构化输出失败({str(e)})，降级模式调用也失败。"""
+
+            # 降级模式下无法生成结构化数据，使用空的decision_dict
             decision_dict = {
                 "action": "持有",
                 "target_price": None,
-                "confidence": 0.7,
+                "confidence": 0.5,
                 "risk_score": 0.5,
-                "reasoning": f"结构化输出失败，使用默认决策: {str(e)}"
+                "reasoning": f"结构化输出失败，降级使用普通模式生成文本分析。原始错误: {str(e)}"
             }
-            response_content = f"""**默认建议：持有**
-
-由于技术原因无法生成详细分析，建议对{company_name}采取持有策略。
-注意：此为系统默认建议。"""
+            logger.info(f"📋 [Risk Manager Structured -> Fallback] 最终决策生成完成，内容长度: {len(response_content)} 字符")
 
         new_risk_debate_state = {
             "judge_decision": response_content,

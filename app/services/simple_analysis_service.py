@@ -83,6 +83,52 @@ async def get_provider_by_model_name(model_name: str) -> str:
         return _get_default_provider_by_model(model_name)
 
 
+def get_model_full_config_sync(model_name: str) -> dict:
+    """
+    根据模型名称从数据库配置中获取完整的模型配置（同步版本）
+
+    Args:
+        model_name: 模型名称，如 'qwen3.6-plus', 'gpt-4' 等
+
+    Returns:
+        dict: {"max_tokens": 32000, "temperature": 0.7, "timeout": 180, "retry_times": 3, ...}
+    """
+    try:
+        from pymongo import MongoClient
+        from app.core.config import settings
+
+        client = MongoClient(settings.MONGO_URI)
+        db = client[settings.MONGO_DB]
+
+        configs_collection = db.system_configs
+        doc = configs_collection.find_one({"is_active": True}, sort=[("version", -1)])
+
+        if doc and "llm_configs" in doc:
+            llm_configs = doc["llm_configs"]
+
+            for config_dict in llm_configs:
+                if config_dict.get("model_name") == model_name:
+                    # 返回完整的模型配置
+                    result = {
+                        "max_tokens": config_dict.get("max_tokens", 4000),
+                        "temperature": config_dict.get("temperature", 0.7),
+                        "timeout": config_dict.get("timeout", 180),
+                        "retry_times": config_dict.get("retry_times", 3),
+                    }
+                    logger.info(f"✅ [模型配置] {model_name}: max_tokens={result['max_tokens']}, temperature={result['temperature']}")
+                    client.close()
+                    return result
+
+        client.close()
+
+    except Exception as e:
+        logger.warning(f"⚠️ [模型配置] 获取 {model_name} 配置失败: {e}")
+
+    # 返回默认配置
+    logger.warning(f"⚠️ [模型配置] 未找到 {model_name} 配置，使用默认值")
+    return {"max_tokens": 4000, "temperature": 0.7, "timeout": 180, "retry_times": 3}
+
+
 def get_provider_by_model_name_sync(model_name: str) -> str:
     """
     根据模型名称从数据库配置中查找对应的供应商（同步版本）
@@ -1202,18 +1248,24 @@ class SimpleAnalysisService:
             else:
                 logger.info(f"✅ [混合模式] 快速模型({quick_provider}) 和 深度模型({deep_provider}) 来自不同厂家")
 
+            # 🔧 获取模型的完整配置（包括 max_tokens、temperature 等）
+            quick_model_config = get_model_full_config_sync(quick_model)
+            deep_model_config = get_model_full_config_sync(deep_model)
+
             # 获取市场类型
             market_type = request.parameters.market_type if request.parameters else "A股"
             logger.info(f"📊 [市场类型] 使用市场类型: {market_type}")
 
-            # 创建分析配置（支持混合模式）
+            # 创建分析配置（支持混合模式，传入模型配置）
             config = create_analysis_config(
                 research_depth=research_depth,
                 selected_analysts=request.parameters.selected_analysts if request.parameters else ["market", "fundamentals"],
                 quick_model=quick_model,
                 deep_model=deep_model,
                 llm_provider=quick_provider,  # 主要使用快速模型的供应商
-                market_type=market_type  # 使用前端传递的市场类型
+                market_type=market_type,  # 使用前端传递的市场类型
+                quick_model_config=quick_model_config,  # 🔥 传入快速模型配置
+                deep_model_config=deep_model_config    # 🔥 传入深度模型配置
             )
 
             # 🔧 添加混合模式配置

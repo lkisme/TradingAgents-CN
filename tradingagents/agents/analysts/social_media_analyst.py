@@ -118,43 +118,47 @@ def create_social_media_analyst(llm, toolkit):
         system_message = (
             """您是一位专业的中国市场社交媒体和投资情绪分析师，负责分析中国投资者对特定股票的讨论和情绪变化。
 
-您的主要职责包括：
-1. 分析中国主要财经平台的投资者情绪（如雪球、东方财富股吧等）
-2. 监控财经媒体和新闻对股票的报道倾向
-3. 识别影响股价的热点事件和市场传言
-4. 评估散户与机构投资者的观点差异
-5. 分析政策变化对投资者情绪的影响
-6. 评估情绪变化对股价的潜在影响
+您现在能访问真实的东方财富股吧情绪指数数据和财经新闻，这是核心分析依据。
 
-重点关注平台：
-- 财经新闻：财联社、新浪财经、东方财富、腾讯财经
-- 投资社区：雪球、东方财富股吧、同花顺
-- 社交媒体：微博财经大V、知乎投资话题
-- 专业分析：各大券商研报、财经自媒体
+## 情绪指数数据解读
 
-分析要点：
-- 投资者情绪的变化趋势和原因
-- 关键意见领袖(KOL)的观点和影响力
-- 热点事件对股价预期的影响
-- 政策解读和市场预期变化
-- 散户情绪与机构观点的差异
+您将获取以下真实情绪指数数据，请按以下系数解读：
 
-📊 情绪影响分析要求：
-- 量化投资者情绪强度（乐观/悲观程度）和情绪变化趋势
-- 评估情绪变化对短期市场反应的影响（1-5天）
-- 分析散户情绪与市场走势的相关性
-- 识别情绪极端点和可能的情绪反转信号
-- 提供基于情绪分析的市场预期和投资建议
-- 评估市场情绪对投资者信心和决策的影响程度
-- 不允许回复'无法评估情绪影响'或'需要更多数据'
+### 情绪指数系数说明
 
-💰 必须包含：
-- 情绪指数评分（1-10分）
-- 预期价格波动幅度
-- 基于情绪的交易时机建议
+| 指标 | 数值范围 | 高值含义（阈值） | 低值含义（阈值） |
+|------|----------|------------------|------------------|
+| **参与意愿** | 0-100 | 50+: 散户讨论热烈，市场活跃度高 | 30以下: 活跃度低，关注度不足 |
+| **关注度** | 60-100 | 80+: 热点股，市场高度关注 | 70以下: 关注度下降，热度减弱 |
+| **综合评价** | 50-80 | 70+: 投资者情绪偏乐观 | 50-60: 偏悲观，需关注风险 |
+| **机构参与度** | 20-60 | 40+: 机构投资者活跃，专业资金参与 | 30以下: 散户主导，机构关注度低 |
 
-请撰写详细的中文分析报告，并在报告末尾附上Markdown表格总结关键发现。
-注意：由于中国社交媒体API限制，如果数据获取受限，请明确说明并提供替代分析建议。"""
+### 特殊组合信号解读
+
+- **高关注(80+) + 低参与意愿(<30)** = 观望态度（市场关注但不愿参与，等待更明确信号）
+- **高参与意愿(50+) + 低机构参与(<30)** = 散户主导行情，需关注持续性风险
+- **机构活跃(40+) + 综合评价乐观(70+)** = 专业投资者看好，可能有基本面支撑
+
+## 分析要点
+
+1. **情绪趋势判断**：分析情绪指数变化趋势（如参与意愿变化值）
+2. **情绪背离识别**：散户情绪与机构情绪的背离情况
+3. **极端情绪预警**：情绪极端点的反转可能性
+4. **财经新闻解读**：结合新闻内容判断情绪驱动因素
+5. **影响周期评估**：情绪对短期(1-5天)股价的潜在影响
+
+## 输出要求
+
+📊 情绪分析报告必须包含：
+- 情绪综合评分（1-10分）
+- 各情绪指数的具体解读（基于系数表）
+- 情绪对短期价格波动的影响预测（幅度预估）
+- 交易时机建议（基于情绪分析）
+
+⚠️ 注意：
+- 必须使用真实数据进行分析，不允许回复"无法评估"或"需要更多数据"
+- 财经新闻应作为情绪解读的辅助依据
+- 请用中文撰写详细分析报告"""
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -217,14 +221,168 @@ def create_social_media_analyst(llm, toolkit):
                 analyst_name="社交媒体分析师"
             )
         else:
-            # 非Google模型的处理逻辑
-            logger.debug(f"📊 [DEBUG] 非Google模型 ({llm.__class__.__name__})，使用标准处理逻辑")
-            
-            report = ""
-            if len(result.tool_calls) == 0:
-                report = result.content
+            # 非Google模型的处理逻辑（参考 Market Analyst）
+            logger.info(f"📊 [社交媒体分析师] 非Google模型 ({llm.__class__.__name__})，使用标准处理逻辑")
+            logger.info(f"📊 [社交媒体分析师] - 是否有tool_calls: {hasattr(result, 'tool_calls')}")
+            if hasattr(result, 'tool_calls'):
+                logger.info(f"📊 [社交媒体分析师] - tool_calls数量: {len(result.tool_calls)}")
+                if result.tool_calls:
+                    for i, tc in enumerate(result.tool_calls):
+                        logger.info(f"📊 [社交媒体分析师] - tool_call[{i}]: {tc.get('name', 'unknown')}")
 
-        # 🔧 更新工具调用计数器
+            # 处理情绪分析报告
+            if len(result.tool_calls) == 0:
+                # 没有工具调用，直接使用LLM的回复
+                report = result.content
+                logger.info(f"📊 [社交媒体分析师] ✅ 直接回复（无工具调用），长度: {len(report)}")
+                logger.debug(f"📊 [DEBUG] 直接回复内容预览: {report[:200]}...")
+            else:
+                # 有工具调用，执行工具并生成完整分析报告
+                logger.info(f"📊 [社交媒体分析师] 🔧 检测到工具调用: {[call.get('name', 'unknown') for call in result.tool_calls]}")
+
+                try:
+                    # 执行工具调用
+                    from langchain_core.messages import ToolMessage, HumanMessage
+
+                    tool_messages = []
+                    for tool_call in result.tool_calls:
+                        tool_name = tool_call.get('name')
+                        tool_args = tool_call.get('args', {})
+                        tool_id = tool_call.get('id')
+
+                        logger.info(f"📊 [社交媒体分析师] 工具执行前，参数: {tool_args}")
+                        logger.debug(f"📊 [DEBUG] 执行工具: {tool_name}, 参数: {tool_args}")
+
+                        # 找到对应的工具并执行
+                        tool_result = None
+                        for tool in tools:
+                            current_tool_name = None
+                            if hasattr(tool, 'name'):
+                                current_tool_name = tool.name
+                            elif hasattr(tool, '__name__'):
+                                current_tool_name = tool.__name__
+
+                            if current_tool_name == tool_name:
+                                try:
+                                    tool_result = tool.invoke(tool_args)
+                                    logger.info(f"📊 [社交媒体分析师] 工具执行后，结果类型: {type(tool_result)}")
+                                    logger.info(f"📊 [社交媒体分析师] ✅ 工具执行成功，结果长度: {len(str(tool_result))}")
+                                    break
+                                except Exception as tool_error:
+                                    logger.error(f"❌ [社交媒体分析师] 工具执行失败: {tool_error}")
+                                    tool_result = f"工具执行失败: {str(tool_error)}"
+
+                        if tool_result is None:
+                            tool_result = f"未找到工具: {tool_name}"
+
+                        # 创建工具消息
+                        tool_message = ToolMessage(
+                            content=str(tool_result),
+                            tool_call_id=tool_id
+                        )
+                        tool_messages.append(tool_message)
+
+                    # 基于工具结果生成完整分析报告
+                    analysis_prompt = f"""现在请基于上述工具获取的情绪数据，生成详细的社交媒体情绪分析报告。
+
+**分析对象：**
+- 公司名称：{company_name}
+- 股票代码：{ticker}
+- 所属市场：{market_info['market_name']}
+
+**输出格式要求（必须严格遵守）：**
+
+请按照以下专业格式输出报告，使用纯文本标题：
+
+# **{company_name}（{ticker}）社交媒体情绪分析报告**
+**分析日期：{current_date}**
+
+---
+
+## 一、情绪指数概览
+
+根据东方财富股吧数据，当前情绪指标如下：
+
+[从工具数据中提取各情绪指数的具体数值，并进行解读]
+
+---
+
+## 二、情绪指数详细分析
+
+### 1. 参与意愿分析
+- 当前数值：[提取数值]
+- 解读：[根据系数表判断：50+为高活跃，30以下为低活跃]
+
+### 2. 关注度分析
+- 当前数值：[提取数值]
+- 解读：[根据系数表判断：80+为热点股，70以下为关注下降]
+
+### 3. 综合评价分析
+- 当前数值：[提取数值]
+- 解读：[根据系数表判断：70+为乐观，50-60为悲观]
+
+### 4. 机构参与度分析
+- 当前数值：[提取数值]
+- 解读：[根据系数表判断：40+为机构活跃，30以下为散户主导]
+
+---
+
+## 三、情绪组合信号分析
+
+[分析情绪指数的组合情况，识别特殊信号：
+- 高关注+低参与意愿 = 观望态度
+- 高参与意愿+低机构参与 = 散户主导风险
+- 机构活跃+综合评价乐观 = 专业看好]
+
+---
+
+## 四、财经新闻情绪解读
+
+[从工具获取的财经新闻中提取关键信息，分析新闻对情绪的影响]
+
+---
+
+## 五、情绪综合评分与交易建议
+
+**情绪综合评分**：[1-10分，综合各指标给出]
+
+**短期价格影响预测**：
+- 预计影响方向：[上涨/下跌/震荡]
+- 预计影响幅度：[百分比范围]
+- 影响周期：[1-5个交易日]
+
+**交易时机建议**：
+[基于情绪分析给出具体建议]
+
+---
+
+⚠️ 注意：必须使用真实数据进行分析，不允许回复"无法评估"或"需要更多数据"。"""
+
+                    # 调用LLM生成最终报告
+                    final_messages = state["messages"] + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]
+                    final_result = llm.invoke(final_messages)
+
+                    report = final_result.content
+                    logger.info(f"📊 [社交媒体分析师] ✅ 分析报告生成完成，长度: {len(report)}")
+                    logger.debug(f"📊 [DEBUG] 报告内容预览: {report[:300]}...")
+
+                    # 返回更新后的状态（包含工具消息和报告）
+                    return {
+                        "messages": [result] + tool_messages + [final_result],
+                        "sentiment_report": report,
+                        "sentiment_tool_call_count": tool_call_count + 1
+                    }
+
+                except Exception as e:
+                    logger.error(f"❌ [社交媒体分析师] 工具执行和报告生成失败: {e}")
+                    report = f"社交媒体分析师调用工具但分析生成失败: {[call.get('name', 'unknown') for call in result.tool_calls]}，错误: {str(e)}"
+                    return {
+                        "messages": [result],
+                        "sentiment_report": report,
+                        "sentiment_tool_call_count": tool_call_count + 1
+                    }
+
+        # 🔧 更新工具调用计数器（无工具调用的情况）
         return {
             "messages": [result],
             "sentiment_report": report,

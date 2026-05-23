@@ -4,6 +4,9 @@ AKShare统一数据提供器
 """
 import asyncio
 import logging
+import threading
+import random
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional, Union
 import pandas as pd
@@ -16,15 +19,26 @@ logger = logging.getLogger(__name__)
 class AKShareProvider(BaseStockDataProvider):
     """
     AKShare统一数据提供器
-    
+
     提供标准化的股票数据接口，支持：
     - 股票基础信息获取
     - 历史行情数据
     - 实时行情数据
     - 财务数据
     - 港股数据支持
+
+    全局限流机制：
+    - 情绪指数API（参与意愿、关注度、综合评价、机构参与度）
+    - 新闻API（stock_news_em）
+    - 同一API两次调用间隔2-4秒随机延迟
     """
-    
+
+    # 类级别静态变量 - 全局限流控制
+    _api_call_lock = threading.Lock()  # 线程锁，保护并发访问
+    _last_call_times: Dict[str, float] = {}  # 记录每个API的最后调用时间
+    _api_rate_limit_min = 2.0  # 最小间隔秒数
+    _api_rate_limit_max = 4.0  # 最大间隔秒数
+
     def __init__(self):
         super().__init__("AKShare")
         self.ak = None
@@ -1260,6 +1274,145 @@ class AKShareProvider(BaseStockDataProvider):
         except Exception as e:
             self.logger.error(f"❌ AKShare新闻获取失败: {e}")
             return None
+
+    def _call_api_with_rate_limit(self, api_name: str, api_func, **kwargs) -> Any:
+        """
+        带全局限流的API调用
+
+        Args:
+            api_name: API名称标识（如 'desire', 'focus', 'evaluation', 'institution', 'news'）
+            api_func: AKShare API函数
+            **kwargs: API函数参数
+
+        Returns:
+            API调用结果（通常是DataFrame）
+        """
+        with self._api_call_lock:
+            current_time = time.time()
+            last_call_time = self._last_call_times.get(api_name, 0)
+            elapsed = current_time - last_call_time
+
+            # 如果距离上次调用不足最小间隔，等待随机时间
+            # 目标：总间隔 = elapsed + wait_time = 2~4秒随机
+            if elapsed < self._api_rate_limit_min:
+                target_interval = random.uniform(self._api_rate_limit_min, self._api_rate_limit_max)
+                wait_time = max(0, target_interval - elapsed)
+                self.logger.debug(f"⏳ [{api_name}] 限流等待 {wait_time:.2f}秒 (目标总间隔: {target_interval:.2f}秒)")
+                time.sleep(wait_time)
+
+            # 调用API
+            try:
+                result = api_func(**kwargs)
+                # 记录调用时间
+                self._last_call_times[api_name] = time.time()
+                return result
+            except Exception as e:
+                # 即使失败也记录时间，避免失败后立即重试造成密集调用
+                self._last_call_times[api_name] = time.time()
+                raise e
+
+    def _get_sentiment_indices(self, code: str) -> Dict[str, Any]:
+        """
+        获取东方财富股吧情绪指数数据和财经新闻（同步方法，带全局限流）
+
+        Args:
+            code: 股票代码（6位数字）
+
+        Returns:
+            情绪指数字典，包含参与意愿、关注度、综合评价、机构参与度、财经新闻
+        """
+        # 使用已初始化的 akshare（在 _initialize_akshare 中导入）
+        ak = self.ak
+
+        result = {'sentiment': {}, 'news': []}
+
+        try:
+            # 1. 参与意愿 (范围 0-100，50+ 表示散户讨论热烈)
+            try:
+                desire_df = self._call_api_with_rate_limit(
+                    'desire', ak.stock_comment_detail_scrd_desire_em, symbol=code
+                )
+                if desire_df is not None and not desire_df.empty:
+                    latest = desire_df.iloc[-1]
+                    result['sentiment']['desire'] = {
+                        'value': self._safe_float(latest.get('参与意愿', 0)),
+                        'change': self._safe_float(latest.get('参与意愿变化', 0)),
+                        'avg_5d': self._safe_float(latest.get('5日平均参与意愿', 0))
+                    }
+                    self.logger.debug(f"📊 {code} 参与意愿: {result['sentiment']['desire']['value']}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ {code} 获取参与意愿失败: {e}")
+                result['sentiment']['desire'] = {'value': None, 'change': None, 'avg_5d': None}
+
+            # 2. 关注度 (范围 60-100，80+ 表示热点股)
+            try:
+                focus_df = self._call_api_with_rate_limit(
+                    'focus', ak.stock_comment_detail_scrd_focus_em, symbol=code
+                )
+                if focus_df is not None and not focus_df.empty:
+                    latest = focus_df.iloc[-1]
+                    result['sentiment']['focus'] = {
+                        'value': self._safe_float(latest.get('用户关注指数', 0))
+                    }
+                    self.logger.debug(f"📊 {code} 关注度: {result['sentiment']['focus']['value']}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ {code} 获取关注度失败: {e}")
+                result['sentiment']['focus'] = {'value': None}
+
+            # 3. 综合评价 (范围 50-80，70+ 表示偏乐观)
+            try:
+                eval_df = self._call_api_with_rate_limit(
+                    'evaluation', ak.stock_comment_detail_zhpj_lspf_em, symbol=code
+                )
+                if eval_df is not None and not eval_df.empty:
+                    latest = eval_df.iloc[-1]
+                    result['sentiment']['evaluation'] = {
+                        'value': self._safe_float(latest.get('评分', 0))
+                    }
+                    self.logger.debug(f"📊 {code} 综合评价: {result['sentiment']['evaluation']['value']}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ {code} 获取综合评价失败: {e}")
+                result['sentiment']['evaluation'] = {'value': None}
+
+            # 4. 机构参与度 (范围 20-60，40+ 表示机构活跃)
+            try:
+                inst_df = self._call_api_with_rate_limit(
+                    'institution', ak.stock_comment_detail_zlkp_jgcyd_em, symbol=code
+                )
+                if inst_df is not None and not inst_df.empty:
+                    latest = inst_df.iloc[-1]
+                    result['sentiment']['institution'] = {
+                        'value': self._safe_float(latest.get('机构参与度', 0))
+                    }
+                    self.logger.debug(f"📊 {code} 机构参与度: {result['sentiment']['institution']['value']}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ {code} 获取机构参与度失败: {e}")
+                result['sentiment']['institution'] = {'value': None}
+
+            # 5. 财经新闻（纳入限流机制）
+            try:
+                news_df = self._call_api_with_rate_limit(
+                    'news', ak.stock_news_em, symbol=code
+                )
+                if news_df is not None and not news_df.empty:
+                    for i, row in news_df.head(10).iterrows():
+                        result['news'].append({
+                            'title': str(row.get('新闻标题', '')),
+                            'content': str(row.get('新闻内容', ''))[:200],
+                            'source': '东方财富',
+                            'time': str(row.get('发布时间', ''))
+                        })
+                    self.logger.debug(f"📰 {code} 财经新闻: {len(result['news'])}条")
+            except Exception as e:
+                self.logger.warning(f"⚠️ {code} 获取财经新闻失败: {e}")
+
+            sentiment_valid = len([k for k, v in result['sentiment'].items() if v.get('value') is not None])
+            self.logger.info(f"✅ {code} 情绪数据获取完成: {sentiment_valid}项情绪指数, {len(result['news'])}条新闻")
+
+        except Exception as e:
+            self.logger.error(f"❌ {code} 情绪数据获取失败: {e}")
+
+        return result
 
     async def get_stock_news(self, symbol: str = None, limit: int = 10) -> Optional[List[Dict[str, Any]]]:
         """
