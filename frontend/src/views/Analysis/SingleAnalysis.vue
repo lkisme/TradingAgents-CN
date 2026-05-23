@@ -126,9 +126,8 @@
                     v-for="analyst in ANALYSTS"
                     :key="analyst.id"
                     class="analyst-card"
-                    :class="{ 
-                      active: analysisForm.selectedAnalysts.includes(analyst.name),
-                      disabled: analyst.name === '社媒分析师' && analysisForm.market === 'A股'
+                    :class="{
+                      active: analysisForm.selectedAnalysts.includes(analyst.name)
                     }"
                     @click="toggleAnalyst(analyst.name)"
                   >
@@ -152,8 +151,8 @@
                 <!-- A股提示 -->
                 <el-alert
                   v-if="analysisForm.market === 'A股'"
-                  title="A股市场暂不支持社媒分析（国内数据源限制）"
-                  type="info"
+                  title="A股社媒分析师已支持东方财富股吧情绪指数和财经新闻"
+                  type="success"
                   :closable="false"
                   style="margin-top: 12px"
                 />
@@ -892,10 +891,6 @@ const fetchStockInfo = () => {
 
 // 切换分析师
 const toggleAnalyst = (analystName: string) => {
-  if (analystName === '社媒分析师' && analysisForm.market === 'A股') {
-    return
-  }
-
   const index = analysisForm.selectedAnalysts.indexOf(analystName)
   if (index > -1) {
     analysisForm.selectedAnalysts.splice(index, 1)

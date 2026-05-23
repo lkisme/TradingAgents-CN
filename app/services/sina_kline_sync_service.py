@@ -24,12 +24,15 @@ class SinaKlineSyncService:
     SINA_API_URL = "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
     MAX_DATALEN = 1023
     SCALE_DAILY = 240
-    REQUEST_INTERVAL_MIN = 0.3  # 最小间隔（秒）
-    REQUEST_INTERVAL_MAX = 0.6  # 最大间隔（秒）
+    REQUEST_INTERVAL_MIN = 1.5  # 最小间隔（秒）
+    REQUEST_INTERVAL_MAX = 1.5  # 最大间隔（秒）
+    BATCH_SIZE = 60             # 每 N 个请求后暂停
+    BATCH_PAUSE_SECONDS = 300   # 暂停时间（5 分钟）
 
     def __init__(self):
         """初始化服务"""
         self.db = None
+        self.request_count = 0  # 请求计数器（用于批量限流保护）
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'http://finance.sina.com.cn/'
@@ -45,8 +48,26 @@ class SinaKlineSyncService:
             raise
 
     def _get_random_interval(self) -> float:
-        """获取随机请求间隔（0.3-0.6 秒）"""
+        """获取随机请求间隔（固定 1.5 秒）"""
         return random.uniform(self.REQUEST_INTERVAL_MIN, self.REQUEST_INTERVAL_MAX)
+
+    def check_and_pause_batch(self) -> bool:
+        """
+        每 BATCH_SIZE 个请求后暂停 BATCH_PAUSE_SECONDS 秒
+
+        Returns:
+            True 表示发生了暂停，False 表示无需暂停
+        """
+        self.request_count += 1
+        if self.request_count % self.BATCH_SIZE == 0:
+            logger.info(
+                f"⏸️ 批量限流保护: 已完成 {self.request_count} 个请求，"
+                f"等待 {self.BATCH_PAUSE_SECONDS} 秒（{self.BATCH_PAUSE_SECONDS/60:.0f} 分钟）..."
+            )
+            import time
+            time.sleep(self.BATCH_PAUSE_SECONDS)
+            return True
+        return False
 
     async def fetch_kline_from_sina(self, symbol: str, datalen: int = 1023) -> List[Dict]:
         """

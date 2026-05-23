@@ -80,7 +80,10 @@ async def sync_from_sina(
             results.append(result)
             total_new += result.get("new_records", 0)
             
-            # 随机间隔 0.3-0.6 秒（避免 API 限流）
+            # 每 60 个请求后等待 5 分钟（批量限流保护）
+            service.check_and_pause_batch()
+            
+            # 请求间隔 1.5 秒（避免 API 限流）
             interval = service._get_random_interval()
             await asyncio.sleep(interval)
             
