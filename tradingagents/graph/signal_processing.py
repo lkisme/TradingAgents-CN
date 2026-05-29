@@ -198,7 +198,12 @@ class SignalProcessor:
                     'target_price': target_price,
                     'confidence': float(decision_data.get('confidence', 0.7)),
                     'risk_score': float(decision_data.get('risk_score', 0.5)),
-                    'reasoning': decision_data.get('reasoning', '基于综合分析的投资建议')
+                    'reasoning': decision_data.get('reasoning', '基于综合分析的投资建议'),
+                    'stop_loss': decision_data.get('stop_loss'),
+                    'risk_reward_ratio': decision_data.get('risk_reward_ratio'),
+                    'position_size': decision_data.get('position_size'),
+                    'horizon': decision_data.get('horizon'),
+                    'invalidation': decision_data.get('invalidation'),
                 }
                 logger.info(f"🔍 [SignalProcessor] 处理结果: {result}",
                            extra={'action': result['action'], 'target_price': result['target_price'],
@@ -322,7 +327,12 @@ class SignalProcessor:
             'target_price': target_price,
             'confidence': 0.7,
             'risk_score': 0.5,
-            'reasoning': '基于综合分析的投资建议'
+            'reasoning': '基于综合分析的投资建议',
+            'stop_loss': None,
+            'risk_reward_ratio': None,
+            'position_size': None,
+            'horizon': None,
+            'invalidation': None,
         }
 
     def _get_default_decision(self) -> dict:
@@ -332,5 +342,10 @@ class SignalProcessor:
             'target_price': None,
             'confidence': 0.5,
             'risk_score': 0.5,
-            'reasoning': '输入数据无效，默认持有建议'
+            'reasoning': '输入数据无效，默认持有建议',
+            'stop_loss': None,
+            'risk_reward_ratio': None,
+            'position_size': None,
+            'horizon': None,
+            'invalidation': None,
         }

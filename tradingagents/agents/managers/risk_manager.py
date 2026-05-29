@@ -32,7 +32,7 @@ def create_risk_manager(llm, memory):
         for i, rec in enumerate(past_memories, 1):
             past_memory_str += rec["recommendation"] + "\n\n"
 
-        prompt = f"""作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。只有在有具体论据强烈支持时才选择持有，而不是在所有方面都似乎有效时作为后备选择。力求清晰和果断。
+        prompt = f"""作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。力求清晰和果断。当数据不足以支持买入或卖出时，持有/弃权是合理的选择。
 
 决策指导原则：
 1. **总结关键论点**：提取每位分析师的最强观点，重点关注与背景的相关性。
@@ -43,7 +43,12 @@ def create_risk_manager(llm, memory):
 交付成果：
 - 明确且可操作的建议：买入、卖出或持有。
 - 基于辩论和过去反思的详细推理。
-- 具体目标价格：必须给出明确的数值或区间（如 XX 元或 XX-XX 元），不允许回复"无法确定"或"需要更多信息"。
+- 具体目标价格：给出明确的数值或区间（如 XX 元或 XX-XX 元）。如数据不足，可标注低置信度。
+- 止损价格：建议的止损价位
+- 盈亏比：预期收益与预期损失的比值
+- 建议仓位：占总资金的比例（0-1）
+- 持有期：预期持仓时间（如"3个交易日"）
+- 失效条件：什么情况下应推翻当前判断
 
 综合分析摘要：
 {combined_report_summary}
@@ -201,7 +206,7 @@ def create_risk_manager_structured(llm, memory):
             past_memory_str += rec["recommendation"] + "\n\n"
 
         # Same prompt as regular risk_manager, with JSON format hint for structured output
-        prompt = f"""请以JSON格式输出您的交易决策。作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。只有在有具体论据强烈支持时才选择持有，而不是在所有方面都似乎有效时作为后备选择。力求清晰和果断。
+        prompt = f"""请以JSON格式输出您的交易决策。作为风险管理委员会主席和辩论主持人，您的目标是评估三位风险分析师——激进、中性和安全/保守——之间的辩论，并确定交易员的最佳行动方案。您的决策必须产生明确的建议：买入、卖出或持有。力求清晰和果断。当数据不足以支持买入或卖出时，持有/弃权是合理的选择。
 
 决策指导原则：
 1. **总结关键论点**：提取每位分析师的最强观点，重点关注与背景的相关性。
@@ -212,7 +217,12 @@ def create_risk_manager_structured(llm, memory):
 交付成果：
 - 明确且可操作的建议：买入、卖出或持有。
 - 基于辩论和过去反思的详细推理。
-- 具体目标价格：必须给出明确的数值或区间（如 XX 元或 XX-XX 元），不允许回复"无法确定"或"需要更多信息"。
+- 具体目标价格：给出明确的数值或区间（如 XX 元或 XX-XX 元）。如数据不足，可标注低置信度。
+- 止损价格：建议的止损价位
+- 盈亏比：预期收益与预期损失的比值
+- 建议仓位：占总资金的比例（0-1）
+- 持有期：预期持仓时间（如"3个交易日"）
+- 失效条件：什么情况下应推翻当前判断
 
 综合分析摘要：
 {combined_report_summary}
@@ -255,6 +265,17 @@ def create_risk_manager_structured(llm, memory):
 **风险评分：** {decision.risk_score:.2f}
 
 **理由：** {decision.reasoning}"""
+
+            if decision.stop_loss is not None:
+                response_content += f"\n\n**止损价格：** {decision.stop_loss}"
+            if decision.risk_reward_ratio is not None:
+                response_content += f"\n\n**盈亏比：** {decision.risk_reward_ratio}"
+            if decision.position_size is not None:
+                response_content += f"\n\n**建议仓位：** {decision.position_size:.0%}"
+            if decision.horizon:
+                response_content += f"\n\n**持有期：** {decision.horizon}"
+            if decision.invalidation:
+                response_content += f"\n\n**失效条件：** {decision.invalidation}"
 
         except Exception as e:
             logger.error(f"❌ [Risk Manager Structured] 结构化输出失败: {e}")
@@ -328,7 +349,12 @@ def create_risk_manager_structured(llm, memory):
                 "target_price": None,
                 "confidence": 0.5,
                 "risk_score": 0.5,
-                "reasoning": f"结构化输出失败，降级使用普通模式生成文本分析。原始错误: {str(e)}"
+                "reasoning": f"结构化输出失败，降级使用普通模式生成文本分析。原始错误: {str(e)}",
+                "stop_loss": None,
+                "risk_reward_ratio": None,
+                "position_size": None,
+                "horizon": None,
+                "invalidation": None,
             }
             logger.info(f"📋 [Risk Manager Structured -> Fallback] 最终决策生成完成，内容长度: {len(response_content)} 字符")
 
