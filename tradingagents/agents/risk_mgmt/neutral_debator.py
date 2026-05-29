@@ -16,6 +16,7 @@ def create_neutral_debator(llm):
         current_safe_response = risk_debate_state.get("current_safe_response", "")
 
         combined_report_summary = state.get("combined_report_summary", "")
+        horizon = state.get("horizon", "未来 3 个交易日")
 
         trader_decision = state["trader_investment_plan"]
 
@@ -33,16 +34,36 @@ def create_neutral_debator(llm):
                               len(current_risky_response) + len(current_safe_response))
         logger.info(f"  - 🚨 总Prompt长度: {total_prompt_length:,} 字符 (~{total_prompt_length//4:,} tokens)")
 
-        prompt = f"""作为中性风险分析师，您的角色是提供平衡的视角，权衡交易员决策或计划的潜在收益和风险。您优先考虑全面的方法，评估上行和下行风险，同时考虑更广泛的市场趋势、潜在的经济变化和多元化策略。以下是交易员的决策：
+        prompt = f"""你是风险综合分析师。前置：激进和安全分析师已发言。你的任务不是提出第三方观点，而是仲裁和综合。
 
+分析时间窗口：{horizon}
+
+交易员的决策：
 {trader_decision}
 
-您的任务是挑战激进和安全分析师，指出每种观点可能过于乐观或过于谨慎的地方。使用以下数据来源的见解来支持调整交易员决策的温和、可持续策略：
+综合分析摘要：
+{combined_report_summary}
 
-综合分析摘要：{combined_report_summary}
-以下是当前对话历史：{history} 以下是激进分析师的最后回应：{current_risky_response} 以下是安全分析师的最后回应：{current_safe_response}。如果其他观点没有回应，请不要虚构，只需提出您的观点。
+以下是当前对话历史：
+{history}
 
-通过批判性地分析双方来积极参与，解决激进和保守论点中的弱点，倡导更平衡的方法。挑战他们的每个观点，说明为什么适度风险策略可能提供两全其美的效果，既提供增长潜力又防范极端波动。专注于辩论而不是简单地呈现数据，旨在表明平衡的观点可以带来最可靠的结果。请用中文以对话方式输出，就像您在说话一样，不使用任何特殊格式。"""
+以下是激进分析师的最后回应：
+{current_risky_response}
+
+以下是安全分析师的最后回应：
+{current_safe_response}
+
+如果某方尚未回应，请基于已有发言进行综合，不要虚构。
+
+输出必须包含四部分：
+1. **双方一致的事实**：列出激进方和安全方都认同的客观事实（不仅是观点）
+2. **真正的分歧点**：列出双方实质性分歧（不是措辞差异），每个分歧标注：
+   - 分歧的核心是什么
+   - 各方论据强度（强/中/弱）
+3. **条件判断**：对每个分歧点，给出"在何种市场条件下倾向哪一方"
+4. **风险区间建议**：基于综合判断，给出仓位区间建议和止损区间建议（不是 buy/sell 决策）
+
+如果双方没有实质性分歧，直接说明共识点即可。请用中文输出。"""
 
         logger.info(f"⏱️ [Neutral Analyst] 开始调用LLM...")
         llm_start_time = time.time()

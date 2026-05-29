@@ -1534,6 +1534,7 @@ class SimpleAnalysisService:
             state, decision = trading_graph.propagate(
                 request.stock_code,
                 analysis_date,
+                horizon=None,
                 progress_callback=graph_progress_callback,
                 task_id=task_id
             )

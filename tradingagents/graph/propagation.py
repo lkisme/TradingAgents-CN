@@ -61,10 +61,11 @@ class Propagator:
         self.max_recur_limit = max_recur_limit
 
     def create_initial_state(
-        self, ticker: str, trade_date: str
+        self, ticker: str, trade_date: str, horizon: str = None
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
         from langchain_core.messages import HumanMessage
+        from tradingagents.default_config import DEFAULT_CONFIG
 
         # Resolve company name once at initialization
         company_name = _resolve_company_name(ticker)
@@ -73,11 +74,15 @@ class Propagator:
         # 这样可以确保所有LLM（包括DeepSeek）都能理解任务
         analysis_request = f"请对股票 {company_name} 进行全面分析，交易日期为 {trade_date}。"
 
+        if horizon is None:
+            horizon = DEFAULT_CONFIG.get("horizon", "未来 3 个交易日")
+
         return {
             "messages": [HumanMessage(content=analysis_request)],
             "company_of_interest": ticker,
             "company_name": company_name,
             "trade_date": str(trade_date),
+            "horizon": horizon,
             "investment_debate_state": InvestDebateState(
                 {"history": "", "current_response": "", "count": 0}
             ),

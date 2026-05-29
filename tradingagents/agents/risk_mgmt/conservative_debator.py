@@ -17,6 +17,7 @@ def create_safe_debator(llm):
         current_neutral_response = risk_debate_state.get("current_neutral_response", "")
 
         combined_report_summary = state.get("combined_report_summary", "")
+        horizon = state.get("horizon", "未来 3 个交易日")
 
         trader_decision = state["trader_investment_plan"]
 
@@ -31,6 +32,8 @@ def create_safe_debator(llm):
         logger.info(f"  - 总Prompt长度: {total_length:,} 字符 (~{total_length//4:,} tokens)")
 
         prompt = f"""你是一位保守风险分析师，负责从风险控制视角评估交易员决策。
+
+分析时间窗口：{horizon}
 
 ⚠️ 你的任务不是反对一切风险，而是客观评估保守策略的证据和代价。
 

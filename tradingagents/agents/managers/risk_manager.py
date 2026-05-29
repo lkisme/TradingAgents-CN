@@ -13,6 +13,7 @@ def create_risk_manager(llm, memory):
 
         company_name = state["company_of_interest"]
         instrument_context = build_instrument_context(company_name)
+        horizon = state.get("horizon", "未来 3 个交易日")
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -38,7 +39,7 @@ def create_risk_manager(llm, memory):
 1. **总结关键论点**：提取每位分析师的最强观点，重点关注与背景的相关性。
 2. **提供理由**：用辩论中的直接引用和反驳论点支持您的建议。
 3. **完善交易员计划**：从交易员的原始计划**{trader_plan}**开始，根据分析师的见解进行调整。
-4. **从过去的错误中学习**：使用**{past_memory_str}**中的经验教训来解决先前的误判，改进您现在做出的决策，确保您不会做出错误的买入/卖出/持有决定而亏损。
+4. **参考历史经验**：以下是过去类似情境的记录（含实际收益结果）。这些记录仅供参考，不代表历史决策正确。请基于当前数据和辩论独立判断，避免过度依赖历史模式。
 
 交付成果：
 - 明确且可操作的建议：买入、卖出或持有。
@@ -47,7 +48,7 @@ def create_risk_manager(llm, memory):
 - 止损价格：建议的止损价位
 - 盈亏比：预期收益与预期损失的比值
 - 建议仓位：占总资金的比例（0-1）
-- 持有期：预期持仓时间（如"3个交易日"）
+- 持有期：{horizon}
 - 失效条件：什么情况下应推翻当前判断
 
 综合分析摘要：
@@ -186,6 +187,7 @@ def create_risk_manager_structured(llm, memory):
 
         company_name = state["company_of_interest"]
         instrument_context = build_instrument_context(company_name)
+        horizon = state.get("horizon", "未来 3 个交易日")
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -212,7 +214,7 @@ def create_risk_manager_structured(llm, memory):
 1. **总结关键论点**：提取每位分析师的最强观点，重点关注与背景的相关性。
 2. **提供理由**：用辩论中的直接引用和反驳论点支持您的建议。
 3. **完善交易员计划**：从交易员的原始计划**{trader_plan}**开始，根据分析师的见解进行调整。
-4. **从过去的错误中学习**：使用**{past_memory_str}**中的经验教训来解决先前的误判，改进您现在做出的决策，确保您不会做出错误的买入/卖出/持有决定而亏损。
+4. **参考历史经验**：以下是过去类似情境的记录（含实际收益结果）。这些记录仅供参考，不代表历史决策正确。请基于当前数据和辩论独立判断，避免过度依赖历史模式。
 
 交付成果：
 - 明确且可操作的建议：买入、卖出或持有。
@@ -221,7 +223,7 @@ def create_risk_manager_structured(llm, memory):
 - 止损价格：建议的止损价位
 - 盈亏比：预期收益与预期损失的比值
 - 建议仓位：占总资金的比例（0-1）
-- 持有期：预期持仓时间（如"3个交易日"）
+- 持有期：{horizon}
 - 失效条件：什么情况下应推翻当前判断
 
 综合分析摘要：

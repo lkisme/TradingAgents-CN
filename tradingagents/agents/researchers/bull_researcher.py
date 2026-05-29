@@ -17,6 +17,7 @@ def create_bull_researcher(llm, memory):
 
         current_response = investment_debate_state.get("current_response", "")
         combined_report_summary = state.get("combined_report_summary", "")
+        horizon = state.get("horizon", "未来 3 个交易日")
 
         # 使用统一的股票类型检测（仅用于货币显示）
         ticker = state.get('company_of_interest', 'Unknown')
@@ -54,7 +55,7 @@ def create_bull_researcher(llm, memory):
 ⚠️ 在你的分析中，请始终使用公司名称"{company_name}"而不是股票代码"{ticker}"来称呼这家公司。
 ⚠️ 所有价格和估值请使用 {currency}（{currency_symbol}）作为单位。
 
-分析时间窗口：未来 3 个交易日
+分析时间窗口：{horizon}
 
 请严格按照以下三部分结构输出：
 
