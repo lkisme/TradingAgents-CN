@@ -1930,10 +1930,12 @@ class OptimizedChinaDataProvider:
                 pe = float(pe_str.replace("倍", ""))
                 if pe < 15:
                     score += 2.0
+                    logger.info(f"📊 [估值评分] PE={pe:.1f} 低估值(<15)，+2.0分，当前估值分={score:.1f}")
                 elif pe < 25:
                     score += 1.0
-                elif pe > 50:
-                    score -= 1.0
+                    logger.info(f"📊 [估值评分] PE={pe:.1f} 合理估值(15-25)，+1.0分，当前估值分={score:.1f}")
+                else:
+                    logger.info(f"📊 [估值评分] PE={pe:.1f} 中高估值(>25)，不加减分，当前估值分={score:.1f}")
             except:
                 pass
 
