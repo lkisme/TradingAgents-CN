@@ -37,24 +37,56 @@ class GraphSetup:
 
     def __init__(
         self,
-        quick_thinking_llm: ChatOpenAI,
-        deep_thinking_llm: ChatOpenAI,
-        toolkit: Toolkit,
-        tool_nodes: Dict[str, ToolNode],
-        bull_memory,
-        bear_memory,
-        trader_memory,
-        invest_judge_memory,
-        risk_manager_memory,
-        conditional_logic: ConditionalLogic,
+        quick_thinking_llm: ChatOpenAI = None,
+        deep_thinking_llm: ChatOpenAI = None,
+        toolkit: Toolkit = None,
+        tool_nodes: Dict[str, ToolNode] = None,
+        bull_memory = None,
+        bear_memory = None,
+        trader_memory = None,
+        invest_judge_memory = None,
+        risk_manager_memory = None,
+        conditional_logic: ConditionalLogic = None,
         config: Dict[str, Any] = None,
         react_llm = None,
         supports_structured_output: bool = False,
         convergence_llm = None,
+        # 4档LLM参数（新增）
+        analyst_llm: ChatOpenAI = None,
+        reasoning_llm: ChatOpenAI = None,
+        decision_llm: ChatOpenAI = None,
+        utility_llm: ChatOpenAI = None,
     ):
-        """Initialize with required components."""
-        self.quick_thinking_llm = quick_thinking_llm
-        self.deep_thinking_llm = deep_thinking_llm
+        """Initialize with required components.
+
+        支持两种模式：
+        1. 旧的2档模式：传入 quick_thinking_llm 和 deep_thinking_llm
+        2. 新的4档模式：传入 analyst_llm, reasoning_llm, decision_llm, utility_llm
+
+        4档定义：
+        - analyst_llm: 工具调用 + 模板化报告（市场/新闻/社交分析师）
+        - reasoning_llm: 估值推理 + 辩论（基本面/Bull/Bear/Risky/Safe）
+        - decision_llm: 关键决策（Trader/Research Manager/Risk Judge/Reflector）
+        - utility_llm: 小任务（收敛判断/信号解析）
+        """
+        # 向后兼容：如果传入旧的2档参数，映射到4档
+        if analyst_llm is None and quick_thinking_llm is not None:
+            analyst_llm = quick_thinking_llm
+            utility_llm = quick_thinking_llm
+        if reasoning_llm is None and deep_thinking_llm is not None:
+            reasoning_llm = deep_thinking_llm
+            decision_llm = deep_thinking_llm
+
+        # 保存4档LLM
+        self.analyst_llm = analyst_llm
+        self.reasoning_llm = reasoning_llm
+        self.decision_llm = decision_llm
+        self.utility_llm = utility_llm
+
+        # 向后兼容属性
+        self.quick_thinking_llm = analyst_llm
+        self.deep_thinking_llm = decision_llm
+
         self.toolkit = toolkit
         self.tool_nodes = tool_nodes
         self.bull_memory = bull_memory
@@ -66,7 +98,7 @@ class GraphSetup:
         self.config = config or {}
         self.react_llm = react_llm
         self.supports_structured_output = supports_structured_output
-        self.convergence_llm = convergence_llm
+        self.convergence_llm = utility_llm or convergence_llm
 
     def setup_graph(
         self, selected_analysts=["market", "social", "news", "fundamentals"]
@@ -108,23 +140,25 @@ class GraphSetup:
             else:
                 logger.debug(f"📈 [DEBUG] 使用标准市场分析师")
 
-            # 所有LLM都使用标准分析师
+            # 🔧 [4档LLM] 市场分析师使用 analyst_llm（工具调用 + 模板化报告）
             analyst_nodes["market"] = create_market_analyst(
-                self.quick_thinking_llm, self.toolkit
+                self.analyst_llm, self.toolkit
             )
             delete_nodes["market"] = create_msg_delete()
             tool_nodes["market"] = self.tool_nodes["market"]
 
         if "social" in selected_analysts:
+            # 🔧 [4档LLM] 社交分析师使用 analyst_llm（工具调用 + 模板化报告）
             analyst_nodes["social"] = create_social_media_analyst(
-                self.quick_thinking_llm, self.toolkit
+                self.analyst_llm, self.toolkit
             )
             delete_nodes["social"] = create_msg_delete()
             tool_nodes["social"] = self.tool_nodes["social"]
 
         if "news" in selected_analysts:
+            # 🔧 [4档LLM] 新闻分析师使用 analyst_llm（工具调用 + 模板化报告）
             analyst_nodes["news"] = create_news_analyst(
-                self.quick_thinking_llm, self.toolkit
+                self.analyst_llm, self.toolkit
             )
             delete_nodes["news"] = create_msg_delete()
             tool_nodes["news"] = self.tool_nodes["news"]
@@ -149,37 +183,43 @@ class GraphSetup:
             else:
                 logger.debug(f"📊 [DEBUG] 使用标准基本面分析师")
 
-            # 所有LLM都使用标准分析师（包含强制工具调用机制）
+            # 🔧 [4档LLM] 基本面分析师使用 reasoning_llm（估值推理 + 辩论）
             analyst_nodes["fundamentals"] = create_fundamentals_analyst(
-                self.quick_thinking_llm, self.toolkit
+                self.reasoning_llm, self.toolkit
             )
             delete_nodes["fundamentals"] = create_msg_delete()
             tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
 
         # Create researcher and manager nodes
-        report_summarizer_node = create_report_summarizer(self.quick_thinking_llm)
+        # 🔧 [4档LLM] 报告总结器使用 analyst_llm（模板化报告）
+        report_summarizer_node = create_report_summarizer(self.analyst_llm)
+        # 🔧 [4档LLM] 多空研究员使用 reasoning_llm（估值推理 + 辩论）
         bull_researcher_node = create_bull_researcher(
-            self.quick_thinking_llm, self.bull_memory
+            self.reasoning_llm, self.bull_memory
         )
         bear_researcher_node = create_bear_researcher(
-            self.quick_thinking_llm, self.bear_memory
+            self.reasoning_llm, self.bear_memory
         )
+        # 🔧 [4档LLM] 研究经理使用 decision_llm（关键决策）
         research_manager_node = create_research_manager(
-            self.deep_thinking_llm, self.invest_judge_memory
+            self.decision_llm, self.invest_judge_memory
         )
-        trader_node = create_trader(self.quick_thinking_llm, self.trader_memory)
+        # 🔧 [4档LLM] 交易员使用 decision_llm（关键决策）
+        trader_node = create_trader(self.decision_llm, self.trader_memory)
 
         # Create risk analysis nodes
-        risky_analyst = create_risky_debator(self.quick_thinking_llm)
-        neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
-        safe_analyst = create_safe_debator(self.quick_thinking_llm)
+        # 🔧 [4档LLM] 风险分析师使用 reasoning_llm（估值推理 + 辩论）
+        risky_analyst = create_risky_debator(self.reasoning_llm)
+        neutral_analyst = create_neutral_debator(self.reasoning_llm)
+        safe_analyst = create_safe_debator(self.reasoning_llm)
 
         # Choose risk manager - temporarily disable structured output
         # Structured output has validation issues (action/target_price missing)
         # Always use standard Risk Manager for reliable text output
         logger.info(f"🔧 [GraphSetup] Using standard Risk Manager (structured output disabled)")
+        # 🔧 [4档LLM] 风险经理使用 decision_llm（关键决策）
         risk_manager_node = create_risk_manager(
-            self.deep_thinking_llm, self.risk_manager_memory
+            self.decision_llm, self.risk_manager_memory
         )
 
         # Create workflow

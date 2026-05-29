@@ -51,6 +51,11 @@ class AnalysisParameters(BaseModel):
     # 模型配置
     quick_analysis_model: Optional[str] = "qwen-turbo"
     deep_analysis_model: Optional[str] = "qwen-max"
+    # 🔧 [4档LLM] 新增4档模型配置（可选，向后兼容）
+    analyst_model: Optional[str] = None
+    reasoning_model: Optional[str] = None
+    decision_model: Optional[str] = None
+    utility_model: Optional[str] = None
 
 
 class AnalysisResult(BaseModel):

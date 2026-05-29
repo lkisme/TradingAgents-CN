@@ -253,6 +253,70 @@ class UnifiedConfigManager:
         settings["quick_analysis_model"] = quick_model
         settings["deep_analysis_model"] = deep_model
         return self.save_system_settings(settings)
+
+    # 🔧 [4档LLM] 新增4档模型获取方法
+    def get_analyst_model(self) -> str:
+        """获取分析师模型（工具调用 + 模板化报告）"""
+        settings = self.get_system_settings()
+        # 优先读取4档配置，否则从2档配置映射
+        return (
+            settings.get("analyst_model")
+            or settings.get("analyst_llm")
+            or settings.get("quick_analysis_model")
+            or settings.get("quick_think_llm", "gpt-4o-mini")
+        )
+
+    def get_reasoning_model(self) -> str:
+        """获取推理模型（估值推理 + 辩论）"""
+        settings = self.get_system_settings()
+        # 优先读取4档配置，否则从2档配置映射
+        return (
+            settings.get("reasoning_model")
+            or settings.get("reasoning_llm")
+            or settings.get("deep_analysis_model")
+            or settings.get("deep_think_llm", "o4-mini")
+        )
+
+    def get_decision_model(self) -> str:
+        """获取决策模型（关键决策）"""
+        settings = self.get_system_settings()
+        # 优先读取4档配置，否则从2档配置映射
+        return (
+            settings.get("decision_model")
+            or settings.get("decision_llm")
+            or settings.get("deep_analysis_model")
+            or settings.get("deep_think_llm", "o4-mini")
+        )
+
+    def get_utility_model(self) -> str:
+        """获取工具模型（小任务）"""
+        settings = self.get_system_settings()
+        # 优先读取4档配置，否则从2档配置映射
+        return (
+            settings.get("utility_model")
+            or settings.get("utility_llm")
+            or settings.get("quick_analysis_model")
+            or settings.get("quick_think_llm", "gpt-4o-mini")
+        )
+
+    def set_four_tier_models(
+        self,
+        analyst_model: str = None,
+        reasoning_model: str = None,
+        decision_model: str = None,
+        utility_model: str = None
+    ) -> bool:
+        """设置4档模型配置"""
+        settings = self.get_system_settings()
+        if analyst_model:
+            settings["analyst_model"] = analyst_model
+        if reasoning_model:
+            settings["reasoning_model"] = reasoning_model
+        if decision_model:
+            settings["decision_model"] = decision_model
+        if utility_model:
+            settings["utility_model"] = utility_model
+        return self.save_system_settings(settings)
     
     # ==================== 数据源配置管理 ====================
     

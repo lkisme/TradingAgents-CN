@@ -498,6 +498,12 @@ def create_analysis_config(
     config["deep_think_llm"] = deep_model
     config["quick_think_llm"] = quick_model
 
+    # 🔧 [4档LLM] 设置4档模型配置（向后兼容：从2档映射）
+    config["analyst_llm"] = quick_model
+    config["utility_llm"] = quick_model
+    config["reasoning_llm"] = deep_model
+    config["decision_llm"] = deep_model
+
     # 根据研究深度调整配置 - 支持5个级别（与Web界面保持一致）
     if research_depth == "快速":
         # 1级 - 快速分析

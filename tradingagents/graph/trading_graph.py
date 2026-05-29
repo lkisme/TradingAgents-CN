@@ -220,6 +220,9 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
 
+        # 🔧 [4档LLM] 向后兼容：将旧的2档配置映射到4档
+        self._migrate_legacy_config()
+
         # Update the interface's config
         set_config(self.config)
 
@@ -541,7 +544,10 @@ class TradingAgentsGraph:
             )
 
             logger.info(f"✅ [自定义厂家 {provider_name}] 已配置自定义端点并应用用户配置的模型参数")
-        
+
+        # 🔧 [4档LLM] 创建4档LLM实例
+        self._create_four_tier_llms()
+
         self.toolkit = Toolkit(config=self.config)
 
         # Initialize memories (如果启用)
@@ -569,7 +575,7 @@ class TradingAgentsGraph:
         self.conditional_logic = ConditionalLogic(
             max_debate_rounds=self.config.get("max_debate_rounds", 1),
             max_risk_discuss_rounds=self.config.get("max_risk_discuss_rounds", 1),
-            convergence_llm=self.quick_thinking_llm  # 用于收敛判断
+            convergence_llm=self.utility_llm  # 🔧 [4档LLM] 使用 utility_llm（小任务）
         )
         logger.info(f"🔧 [ConditionalLogic] 初始化完成:")
         logger.info(f"   - max_debate_rounds: {self.conditional_logic.max_debate_rounds}")
@@ -579,25 +585,30 @@ class TradingAgentsGraph:
         self._supports_structured_output = self._probe_structured_output(self.deep_thinking_llm)
 
         self.graph_setup = GraphSetup(
-            self.quick_thinking_llm,
-            self.deep_thinking_llm,
-            self.toolkit,
-            self.tool_nodes,
-            self.bull_memory,
-            self.bear_memory,
-            self.trader_memory,
-            self.invest_judge_memory,
-            self.risk_manager_memory,
-            self.conditional_logic,
-            self.config,
-            getattr(self, 'react_llm', None),
+            # 🔧 [4档LLM] 传入4档LLM实例
+            analyst_llm=self.analyst_llm,
+            reasoning_llm=self.reasoning_llm,
+            decision_llm=self.decision_llm,
+            utility_llm=self.utility_llm,
+            # 其他参数
+            toolkit=self.toolkit,
+            tool_nodes=self.tool_nodes,
+            bull_memory=self.bull_memory,
+            bear_memory=self.bear_memory,
+            trader_memory=self.trader_memory,
+            invest_judge_memory=self.invest_judge_memory,
+            risk_manager_memory=self.risk_manager_memory,
+            conditional_logic=self.conditional_logic,
+            config=self.config,
+            react_llm=getattr(self, 'react_llm', None),
             supports_structured_output=self._supports_structured_output,
-            convergence_llm=self.quick_thinking_llm,  # 用于收敛判断
         )
 
         self.propagator = Propagator()
-        self.reflector = Reflector(self.quick_thinking_llm)
-        self.signal_processor = SignalProcessor(self.quick_thinking_llm)
+        # 🔧 [4档LLM] Reflector 使用 decision_llm（关键决策）
+        self.reflector = Reflector(self.decision_llm)
+        # 🔧 [4档LLM] SignalProcessor 使用 utility_llm（小任务）
+        self.signal_processor = SignalProcessor(self.utility_llm)
 
         # State tracking
         self.curr_state = None
@@ -606,6 +617,153 @@ class TradingAgentsGraph:
 
         # Set up the graph
         self.graph = self.graph_setup.setup_graph(selected_analysts)
+
+    def _migrate_legacy_config(self):
+        """向后兼容：将旧的2档配置映射到4档
+
+        映射规则：
+        - analyst_llm ← quick_think_llm
+        - utility_llm ← quick_think_llm
+        - reasoning_llm ← deep_think_llm
+        - decision_llm ← deep_think_llm
+        """
+        # 检查是否已经是4档配置
+        if "analyst_llm" in self.config:
+            logger.info("✅ [4档LLM] 检测到新4档配置，无需迁移")
+            return
+
+        logger.info("🔄 [4档LLM] 检测到旧的2档配置，开始迁移到4档...")
+
+        # 映射模型名称
+        quick_model = self.config.get("quick_think_llm", "gpt-4o-mini")
+        deep_model = self.config.get("deep_think_llm", "o4-mini")
+
+        self.config["analyst_llm"] = quick_model
+        self.config["utility_llm"] = quick_model
+        self.config["reasoning_llm"] = deep_model
+        self.config["decision_llm"] = deep_model
+
+        # 映射模型配置
+        quick_config = self.config.get("quick_model_config", {})
+        deep_config = self.config.get("deep_model_config", {})
+
+        self.config["analyst_model_config"] = quick_config.copy() if quick_config else {
+            "max_tokens": 4000,
+            "temperature": 0.7,
+            "timeout": 180,
+        }
+        self.config["utility_model_config"] = quick_config.copy() if quick_config else {
+            "max_tokens": 2000,
+            "temperature": 0.3,
+            "timeout": 120,
+        }
+        self.config["reasoning_model_config"] = deep_config.copy() if deep_config else {
+            "max_tokens": 4000,
+            "temperature": 0.7,
+            "timeout": 180,
+        }
+        self.config["decision_model_config"] = deep_config.copy() if deep_config else {
+            "max_tokens": 4000,
+            "temperature": 0.7,
+            "timeout": 180,
+        }
+
+        # 映射 provider 配置（如果存在）
+        if "quick_provider" in self.config:
+            self.config["analyst_provider"] = self.config["quick_provider"]
+            self.config["utility_provider"] = self.config["quick_provider"]
+        if "deep_provider" in self.config:
+            self.config["reasoning_provider"] = self.config["deep_provider"]
+            self.config["decision_provider"] = self.config["deep_provider"]
+
+        # 映射 backend_url
+        if "quick_backend_url" in self.config:
+            self.config["analyst_backend_url"] = self.config["quick_backend_url"]
+            self.config["utility_backend_url"] = self.config["quick_backend_url"]
+        if "deep_backend_url" in self.config:
+            self.config["reasoning_backend_url"] = self.config["deep_backend_url"]
+            self.config["decision_backend_url"] = self.config["deep_backend_url"]
+
+        # 映射 API keys
+        if "quick_api_key" in self.config:
+            self.config["analyst_api_key"] = self.config["quick_api_key"]
+            self.config["utility_api_key"] = self.config["quick_api_key"]
+        if "deep_api_key" in self.config:
+            self.config["reasoning_api_key"] = self.config["deep_api_key"]
+            self.config["decision_api_key"] = self.config["deep_api_key"]
+
+        logger.info(f"✅ [4档LLM] 迁移完成:")
+        logger.info(f"   - analyst_llm: {self.config['analyst_llm']}")
+        logger.info(f"   - utility_llm: {self.config['utility_llm']}")
+        logger.info(f"   - reasoning_llm: {self.config['reasoning_llm']}")
+        logger.info(f"   - decision_llm: {self.config['decision_llm']}")
+
+    def _create_four_tier_llms(self):
+        """创建4档LLM实例
+
+        4档定义：
+        - analyst_llm: 工具调用 + 模板化报告（市场/新闻/社交分析师）
+        - reasoning_llm: 估值推理 + 辩论（基本面/Bull/Bear/Risky/Safe）
+        - decision_llm: 关键决策（Trader/Research Manager/Risk Judge/Reflector）
+        - utility_llm: 小任务（收敛判断/信号解析）
+        """
+        logger.info("🔧 [4档LLM] 开始创建4档LLM实例...")
+
+        # 读取4档配置
+        analyst_model = self.config.get("analyst_llm", "gpt-4o-mini")
+        reasoning_model = self.config.get("reasoning_llm", "o4-mini")
+        decision_model = self.config.get("decision_llm", "o4-mini")
+        utility_model = self.config.get("utility_llm", "gpt-4o-mini")
+
+        analyst_config = self.config.get("analyst_model_config", {})
+        reasoning_config = self.config.get("reasoning_model_config", {})
+        decision_config = self.config.get("decision_model_config", {})
+        utility_config = self.config.get("utility_model_config", {})
+
+        # 获取 provider 和 backend_url（优先使用档位专用配置，否则使用全局配置）
+        def get_provider_and_url(tier_name: str):
+            """获取指定档位的 provider 和 backend_url"""
+            provider = self.config.get(f"{tier_name}_provider") or self.config.get("llm_provider", "openai")
+            backend_url = self.config.get(f"{tier_name}_backend_url") or self.config.get("backend_url", "https://api.openai.com/v1")
+            api_key = self.config.get(f"{tier_name}_api_key")
+            return normalize_provider_key(provider), backend_url, api_key
+
+        # 创建LLM的辅助函数
+        def create_tier_llm(tier_name: str, model: str, config: dict):
+            """创建指定档位的LLM"""
+            provider, backend_url, api_key = get_provider_and_url(tier_name)
+
+            max_tokens = config.get("max_tokens", 4000)
+            temperature = config.get("temperature", 0.7)
+            timeout = config.get("timeout", 180)
+
+            logger.info(f"🔧 [{tier_name}] provider={provider}, model={model}, max_tokens={max_tokens}, temperature={temperature}")
+
+            return create_llm_by_provider(
+                provider=provider,
+                model=model,
+                backend_url=backend_url,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                api_key=api_key,
+            )
+
+        # 创建4档LLM实例
+        self.analyst_llm = create_tier_llm("analyst", analyst_model, analyst_config)
+        self.reasoning_llm = create_tier_llm("reasoning", reasoning_model, reasoning_config)
+        self.decision_llm = create_tier_llm("decision", decision_model, decision_config)
+        self.utility_llm = create_tier_llm("utility", utility_model, utility_config)
+
+        # 保留向后兼容的属性
+        self.quick_thinking_llm = self.analyst_llm  # 向后兼容
+        self.deep_thinking_llm = self.decision_llm  # 向后兼容
+
+        logger.info("✅ [4档LLM] 4档LLM实例创建完成:")
+        logger.info(f"   - analyst_llm: {analyst_model}")
+        logger.info(f"   - reasoning_llm: {reasoning_model}")
+        logger.info(f"   - decision_llm: {decision_model}")
+        logger.info(f"   - utility_llm: {utility_model}")
 
     def _create_tool_nodes(self) -> Dict[str, ToolNode]:
         """Create tool nodes for different data sources.
