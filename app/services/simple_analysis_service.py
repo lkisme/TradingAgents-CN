@@ -431,7 +431,11 @@ def create_analysis_config(
     llm_provider: str,
     market_type: str = "A股",
     quick_model_config: dict = None,  # 新增：快速模型的完整配置
-    deep_model_config: dict = None    # 新增：深度模型的完整配置
+    deep_model_config: dict = None,   # 新增：深度模型的完整配置
+    analyst_model: str = None,        # 4档：分析师模型（回退到 quick_model）
+    reasoning_model: str = None,      # 4档：推理模型（回退到 deep_model）
+    decision_model: str = None,       # 4档：决策模型（回退到 deep_model）
+    utility_model: str = None,        # 4档：工具模型（回退到 quick_model）
 ) -> dict:
     """
     创建分析配置 - 支持数字等级和中文等级
@@ -498,11 +502,11 @@ def create_analysis_config(
     config["deep_think_llm"] = deep_model
     config["quick_think_llm"] = quick_model
 
-    # 🔧 [4档LLM] 设置4档模型配置（向后兼容：从2档映射）
-    config["analyst_llm"] = quick_model
-    config["utility_llm"] = quick_model
-    config["reasoning_llm"] = deep_model
-    config["decision_llm"] = deep_model
+    # 🔧 [4档LLM] 设置4档模型配置（优先使用4档参数，回退到2档映射）
+    config["analyst_llm"] = analyst_model or quick_model
+    config["utility_llm"] = utility_model or quick_model
+    config["reasoning_llm"] = reasoning_model or deep_model
+    config["decision_llm"] = decision_model or deep_model
 
     # 根据研究深度调整配置 - 支持5个级别（与Web界面保持一致）
     if research_depth == "快速":
@@ -572,6 +576,33 @@ def create_analysis_config(
         logger.info(f"   来源: 模型 {quick_model} 的配置或厂家 {quick_provider_info['provider']} 的默认地址")
         logger.info(f"🔑 快速模型 API Key: {'已配置' if config['quick_api_key'] else '未配置（将使用环境变量）'}")
         logger.info(f"🔑 深度模型 API Key: {'已配置' if config['deep_api_key'] else '未配置（将使用环境变量）'}")
+
+        # 🔧 [4档LLM] 按模型名从 MongoDB 查 provider，写入每个档位的字段
+        # 模型名在 MongoDB 中唯一，每个模型自带 provider 和 backend_url
+        tier_models = {
+            "analyst": config["analyst_llm"],
+            "utility": config["utility_llm"],
+            "reasoning": config["reasoning_llm"],
+            "decision": config["decision_llm"],
+        }
+        # 去重：同一个模型名只查一次 MongoDB
+        unique_models = set(tier_models.values())
+        model_provider_cache = {}
+        for model_name in unique_models:
+            if model_name == quick_model:
+                model_provider_cache[model_name] = quick_provider_info
+            elif model_name == deep_model:
+                model_provider_cache[model_name] = deep_provider_info
+            else:
+                model_provider_cache[model_name] = get_provider_and_url_by_model_sync(model_name)
+
+        for tier_name, model_name in tier_models.items():
+            info = model_provider_cache[model_name]
+            config[f"{tier_name}_provider"] = info.get("provider")
+            config[f"{tier_name}_backend_url"] = info.get("backend_url")
+            config[f"{tier_name}_api_key"] = info.get("api_key")
+            logger.info(f"🔧 [4档-{tier_name}] {model_name} → {info.get('provider')} ({info.get('backend_url')})")
+
     except Exception as e:
         logger.warning(f"⚠️  无法从数据库获取 backend_url 和 API Key: {e}")
         config["backend_url"] = _get_default_backend_url(llm_provider)
@@ -1262,6 +1293,19 @@ class SimpleAnalysisService:
             market_type = request.parameters.market_type if request.parameters else "A股"
             logger.info(f"📊 [市场类型] 使用市场类型: {market_type}")
 
+            # 🔧 [4档LLM] 从请求中读取4档模型参数（可选，向后兼容）
+            analyst_model = None
+            reasoning_model = None
+            decision_model = None
+            utility_model = None
+            if request.parameters:
+                analyst_model = getattr(request.parameters, 'analyst_model', None)
+                reasoning_model = getattr(request.parameters, 'reasoning_model', None)
+                decision_model = getattr(request.parameters, 'decision_model', None)
+                utility_model = getattr(request.parameters, 'utility_model', None)
+                if any([analyst_model, reasoning_model, decision_model, utility_model]):
+                    logger.info(f"🔧 [4档LLM] 检测到4档模型参数: analyst={analyst_model}, reasoning={reasoning_model}, decision={decision_model}, utility={utility_model}")
+
             # 创建分析配置（支持混合模式，传入模型配置）
             config = create_analysis_config(
                 research_depth=research_depth,
@@ -1271,7 +1315,11 @@ class SimpleAnalysisService:
                 llm_provider=quick_provider,  # 主要使用快速模型的供应商
                 market_type=market_type,  # 使用前端传递的市场类型
                 quick_model_config=quick_model_config,  # 🔥 传入快速模型配置
-                deep_model_config=deep_model_config    # 🔥 传入深度模型配置
+                deep_model_config=deep_model_config,    # 🔥 传入深度模型配置
+                analyst_model=analyst_model,
+                reasoning_model=reasoning_model,
+                decision_model=decision_model,
+                utility_model=utility_model,
             )
 
             # 🔧 添加混合模式配置
