@@ -105,9 +105,24 @@ def create_news_analyst(llm, toolkit):
         
         tools = [unified_news_tool]
         logger.info(f"[新闻分析师] 已加载统一新闻工具: get_stock_news_unified")
+        output_contract = (
+            "## 结构化结论\n"
+            "- 数据状态：完整/部分/失败\n"
+            "- 方向：看涨/中性/看跌\n"
+            "- 置信度：0-1\n"
+            "- 当前价格：如果新闻数据未提供则写「无」\n"
+            "- 目标价/区间：如果没有当前价，不得给出具体目标价，只能说明新闻影响方向\n"
+            "- 核心证据：最多5条\n"
+            "- 主要风险：最多5条\n"
+            "- 缺失数据：无/列出缺失项\n"
+            "\n"
+            "目标价一致性规则：如果给出买入倾向，目标价必须高于当前价并说明新闻催化依据；"
+            "如果给出卖出倾向，目标价必须低于当前价或给出止损依据；"
+            "如果没有当前价，不得给出确定性目标价。\n"
+        )
 
         system_message = (
-            """您是一位专业的财经新闻分析师，负责分析最新的市场新闻和事件对股票价格的潜在影响。
+            f"""您是一位专业的财经新闻分析师，负责分析最新的市场新闻和事件对股票价格的潜在影响。
 
 您的主要职责包括：
 1. 获取和分析最新的实时新闻（优先15-30分钟内的新闻）
@@ -145,7 +160,9 @@ def create_news_analyst(llm, toolkit):
 💰 必须包含基于新闻的市场反应预期和投资建议
 🎯 聚焦新闻内容本身的解读，不涉及技术指标分析
 
-请撰写详细的中文分析报告，并在报告末尾附上Markdown表格总结关键发现。"""
+请撰写详细的中文分析报告，并在报告末尾附上Markdown表格总结关键发现。
+
+{output_contract}"""
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -189,6 +206,7 @@ def create_news_analyst(llm, toolkit):
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(ticker=ticker)
         prompt = prompt.partial(instrument_context=instrument_context)
+        prompt = prompt.partial(output_contract=output_contract)
         
         # 获取模型信息用于统一新闻工具的特殊处理
         model_info = ""
@@ -245,7 +263,9 @@ def create_news_analyst(llm, toolkit):
 1. 新闻事件总结
 2. 对股票的影响分析
 3. 市场情绪评估
-4. 投资建议"""
+4. 投资建议
+
+{output_contract}"""
 
                     logger.info(f"[新闻分析师] 🔄 使用预获取新闻数据直接生成分析...")
                     logger.info(f"[新闻分析师] 📝 系统提示词长度: {len(analysis_system_prompt)} 字符")

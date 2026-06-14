@@ -140,6 +140,22 @@ def create_market_analyst(llm, toolkit):
         logger.info(f"📊 [市场分析师] 目标市场: {market_info['market_name']}")
 
         # 🔥 优化：将输出格式要求放在系统提示的开头，确保LLM遵循格式
+        output_contract = (
+            "## 结构化结论\n"
+            "- 数据状态：完整/部分/失败\n"
+            "- 方向：看涨/中性/看跌\n"
+            "- 置信度：0-1\n"
+            "- 当前价格：如果工具数据未提供则写「无」\n"
+            "- 目标价/区间：如果没有当前价，不得给出具体目标价，只能说明所需数据\n"
+            "- 核心证据：最多5条\n"
+            "- 主要风险：最多5条\n"
+            "- 缺失数据：无/列出缺失项\n"
+            "\n"
+            "目标价一致性规则：如果给出买入倾向，目标价必须高于当前价并说明依据；"
+            "如果给出卖出倾向，目标价必须低于当前价或给出止损依据；"
+            "如果没有当前价，不得给出确定性目标价。\n"
+        )
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
@@ -190,6 +206,8 @@ def create_market_analyst(llm, toolkit):
                     "- 如果你有明确的技术面投资建议（买入/持有/卖出），请在投资建议部分明确标注\n"
                     "- 不要使用'最终交易建议'前缀，因为最终决策需要综合所有分析师的意见\n"
                     "\n"
+                    "{output_contract}"
+                    "\n"
                     "请使用中文，基于真实数据进行分析。",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
@@ -215,6 +233,7 @@ def create_market_analyst(llm, toolkit):
         prompt = prompt.partial(currency_name=market_info['currency_name'])
         prompt = prompt.partial(currency_symbol=market_info['currency_symbol'])
         prompt = prompt.partial(instrument_context=instrument_context)
+        prompt = prompt.partial(output_contract=output_contract)
 
         # 添加详细日志
         logger.info(f"📊 [市场分析师] LLM类型: {llm.__class__.__name__}")
@@ -467,7 +486,9 @@ def create_market_analyst(llm, toolkit):
 - 提供明确的投资建议和风险提示
 - 报告长度不少于800字
 - 使用中文撰写
-- 使用表格展示数据时，确保格式规范"""
+- 使用表格展示数据时，确保格式规范
+
+{output_contract}"""
 
                     # 构建完整的消息序列
                     messages = state["messages"] + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]

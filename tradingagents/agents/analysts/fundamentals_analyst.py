@@ -165,6 +165,21 @@ def create_fundamentals_analyst(llm, toolkit):
         # 对于A股，它会自动获取价格数据和基本面数据，无需LLM调用多个工具
         logger.info(f"📊 [基本面分析师] 使用统一基本面分析工具，自动识别股票类型")
         tools = [toolkit.get_stock_fundamentals_unified]
+        output_contract = (
+            "## 结构化结论\n"
+            "- 数据状态：完整/部分/失败\n"
+            "- 方向：看涨/中性/看跌\n"
+            "- 置信度：0-1\n"
+            "- 当前价格：如果工具数据未提供则写「无」\n"
+            "- 目标价/区间：如果没有当前价，不得给出具体目标价，只能说明所需数据\n"
+            "- 核心证据：最多5条\n"
+            "- 主要风险：最多5条\n"
+            "- 缺失数据：无/列出缺失项\n"
+            "\n"
+            "目标价一致性规则：如果给出买入倾向，目标价必须高于当前价并说明估值依据；"
+            "如果给出卖出倾向，目标价必须低于当前价或给出止损依据；"
+            "如果没有当前价，不得给出确定性目标价。\n"
+        )
 
         # 安全地获取工具名称用于调试
         tool_names_debug = []
@@ -210,6 +225,7 @@ def create_fundamentals_analyst(llm, toolkit):
             "- 基于真实数据进行分析"
             "- 提供具体的价位区间和目标价"
             "- 使用中文投资建议（买入/持有/卖出）"
+            f"{output_contract}"
             "现在立即开始调用工具！不要说任何其他话！"
         )
 
@@ -227,6 +243,7 @@ def create_fundamentals_analyst(llm, toolkit):
             "   - 当前股价是否被低估或高估的判断"
             "   - 合理价位区间和目标价位建议"
             "   - 基于基本面的投资建议（买入/持有/卖出）"
+            f"{output_contract}"
             "4. 🚨 重要：工具只需调用一次！一次调用返回所有需要的数据！不要重复调用！🚨"
             "5. 🚨 如果你已经看到ToolMessage，说明工具已经返回数据，直接生成报告，不要再调用工具！🚨"
             "可用工具：{tool_names}。\n{system_message}"
@@ -468,6 +485,7 @@ def create_fundamentals_analyst(llm, toolkit):
                         f"- 基于消息历史中的真实数据进行分析\n"
                         f"- 分析要详细且专业\n"
                         f"- 投资建议必须明确（买入/持有/卖出）"
+                        f"\n{output_contract}"
                     )
 
                     # 创建专门的提示模板（不绑定工具）
@@ -656,7 +674,9 @@ def create_fundamentals_analyst(llm, toolkit):
 - 正确使用公司名称"{company_name}"和股票代码"{ticker}"
 - 价格使用{currency_info}
 - 投资建议使用中文
-- 分析要详细且专业"""
+- 分析要详细且专业
+
+{output_contract}"""
 
                 try:
                     # 创建简单的分析链

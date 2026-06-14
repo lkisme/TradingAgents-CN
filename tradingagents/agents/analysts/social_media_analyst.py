@@ -114,9 +114,24 @@ def create_social_media_analyst(llm, toolkit):
         # 该工具内部会自动识别股票类型并调用相应的情绪数据源
         logger.info(f"[社交媒体分析师] 使用统一情绪分析工具，自动识别股票类型")
         tools = [toolkit.get_stock_sentiment_unified]
+        output_contract = (
+            "## 结构化结论\n"
+            "- 数据状态：完整/部分/失败\n"
+            "- 方向：看涨/中性/看跌\n"
+            "- 置信度：0-1\n"
+            "- 当前价格：如果情绪数据未提供则写「无」\n"
+            "- 目标价/区间：如果没有当前价，不得给出具体目标价，只能说明情绪影响方向\n"
+            "- 核心证据：最多5条\n"
+            "- 主要风险：最多5条\n"
+            "- 缺失数据：无/列出缺失项\n"
+            "\n"
+            "目标价一致性规则：如果给出买入倾向，目标价必须高于当前价并说明情绪或资金依据；"
+            "如果给出卖出倾向，目标价必须低于当前价或给出止损依据；"
+            "如果没有当前价，不得给出确定性目标价。\n"
+        )
 
         system_message = (
-            """您是一位专业的中国市场社交媒体和投资情绪分析师，负责分析中国投资者对特定股票的讨论和情绪变化。
+            f"""您是一位专业的中国市场社交媒体和投资情绪分析师，负责分析中国投资者对特定股票的讨论和情绪变化。
 
 您现在能访问真实的东方财富股吧情绪指数数据和财经新闻，这是核心分析依据。
 
@@ -158,7 +173,9 @@ def create_social_media_analyst(llm, toolkit):
 ⚠️ 注意：
 - 必须使用真实数据进行分析，不允许回复"无法评估"或"需要更多数据"
 - 财经新闻应作为情绪解读的辅助依据
-- 请用中文撰写详细分析报告"""
+- 请用中文撰写详细分析报告
+
+{output_contract}"""
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -356,7 +373,9 @@ def create_social_media_analyst(llm, toolkit):
 
 ---
 
-⚠️ 注意：必须使用真实数据进行分析，不允许回复"无法评估"或"需要更多数据"。"""
+⚠️ 注意：必须使用真实数据进行分析；如果数据为空、过期或失败，必须在结构化结论中标注数据状态和缺失数据。
+
+{output_contract}"""
 
                     # 调用LLM生成最终报告
                     final_messages = state["messages"] + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]
