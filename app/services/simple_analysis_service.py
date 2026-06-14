@@ -2117,6 +2117,7 @@ class SimpleAnalysisService:
         """
         try:
             task_status = None
+            mongo_status = None
             if status:
                 try:
                     # 前端传递的是 "processing"，但 TaskStatus 使用的是 "running"
@@ -2130,18 +2131,36 @@ class SimpleAnalysisService:
                     }
                     mapped_status = status_mapping.get(status, status)
                     task_status = TaskStatus(mapped_status)
+                    mongo_status_mapping = {
+                        "running": "processing",
+                        "processing": "processing",
+                        "pending": "pending",
+                        "completed": "completed",
+                        "failed": "failed",
+                        "cancelled": "cancelled"
+                    }
+                    mongo_status = mongo_status_mapping.get(status, status)
                 except ValueError:
                     logger.warning(f"⚠️ [Tasks] 无效的状态值: {status}")
                     task_status = None
+                    mongo_status = None
 
             # 1) 从内存读取任务
             logger.info(f"📋 [Tasks] 准备从内存读取任务: user_id={user_id}, status={status} (mapped to {task_status}), limit={limit}, offset={offset}")
-            tasks_in_mem = await self.memory_manager.list_user_tasks(
-                user_id=user_id,
-                status=task_status,
-                limit=limit * 2,  # 多读一些，后面合并去重
-                offset=0  # 内存中的任务不多，全部读取
-            )
+            tasks_in_mem: List[Dict[str, Any]] = []
+            memory_page_size = 1000
+            memory_offset = 0
+            while True:
+                memory_page = await self.memory_manager.list_user_tasks(
+                    user_id=user_id,
+                    status=task_status,
+                    limit=memory_page_size,
+                    offset=memory_offset
+                )
+                tasks_in_mem.extend(memory_page)
+                if len(memory_page) < memory_page_size:
+                    break
+                memory_offset += memory_page_size
             logger.info(f"📋 [Tasks] 内存返回数量: {len(tasks_in_mem)}")
 
             # 🔧 对内存任务应用额外的过滤条件（symbol、market_type、日期范围）
@@ -2240,10 +2259,9 @@ class SimpleAnalysisService:
                 ]
                 query = {"$or": user_or_conditions}  # 用户归属（必须条件）
 
-                if task_status:
-                    # 使用映射后的状态值（TaskStatus枚举的value）
-                    query["status"] = task_status.value
-                    logger.info(f"📋 [Tasks] 添加状态过滤: {task_status.value}")
+                if mongo_status:
+                    query["status"] = mongo_status
+                    logger.info(f"📋 [Tasks] 添加状态过滤: {mongo_status}")
 
                 # 🔧 新增过滤条件：股票代码、市场类型、日期范围
                 # 注意：这些条件应该用 $and 组合，而非追加到用户归属的 $or 中
@@ -2267,18 +2285,13 @@ class SimpleAnalysisService:
                     logger.info(f"📋 [Tasks] 添加市场类型过滤: {market_type}")
 
                 if start_date or end_date:
-                    # 时间范围过滤（created_at 或 started_at 任一匹配）
-                    date_conditions = []
+                    # 时间范围过滤：created_at 或 started_at 其中一个字段完整落在范围内
+                    date_bounds: Dict[str, Any] = {}
                     from datetime import datetime as dt_parse
                     if start_date:
                         try:
                             start_dt = dt_parse.fromisoformat(start_date)
-                            # created_at 或 started_at 任一 >= start_date
-                            date_inner_or = [
-                                {"created_at": {"$gte": start_dt}},
-                                {"started_at": {"$gte": start_dt}}
-                            ]
-                            date_conditions.append({"$or": date_inner_or})
+                            date_bounds["$gte"] = start_dt
                         except Exception as e:
                             logger.warning(f"⚠️ [Tasks] start_date 解析失败: {start_date}, {e}")
                     if end_date:
@@ -2286,16 +2299,16 @@ class SimpleAnalysisService:
                             end_dt = dt_parse.fromisoformat(end_date)
                             # 结束日期需要包含当天
                             end_dt = end_dt.replace(hour=23, minute=59, second=59)
-                            date_inner_or = [
-                                {"created_at": {"$lte": end_dt}},
-                                {"started_at": {"$lte": end_dt}}
-                            ]
-                            date_conditions.append({"$or": date_inner_or})
+                            date_bounds["$lte"] = end_dt
                         except Exception as e:
                             logger.warning(f"⚠️ [Tasks] end_date 解析失败: {end_date}, {e}")
-                    if date_conditions:
-                        # start 和 end 都需要满足（$and），但每个条件内部是 $or
-                        and_conditions.append({"$and": date_conditions})
+                    if date_bounds:
+                        and_conditions.append({
+                            "$or": [
+                                {"created_at": date_bounds},
+                                {"started_at": date_bounds}
+                            ]
+                        })
 
                 # 将所有过滤条件用 $and 组合到 query
                 if and_conditions:
@@ -2400,10 +2413,8 @@ class SimpleAnalysisService:
             if mem_task_ids:
                 try:
                     # 查询 MongoDB 检查这些 task_id 是否存在
-                    existing_ids_cursor = db.analysis_tasks.find(
-                        {"task_id": {"$in": mem_task_ids}},
-                        {"task_id": 1}
-                    )
+                    existing_query = {"$and": [query, {"task_id": {"$in": mem_task_ids}}]}
+                    existing_ids_cursor = db.analysis_tasks.find(existing_query, {"task_id": 1})
                     existing_ids = set()
                     async for doc in existing_ids_cursor:
                         existing_ids.add(doc.get("task_id"))
