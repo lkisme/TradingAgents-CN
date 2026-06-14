@@ -296,11 +296,11 @@ const loadList = async () => {
       }
     })
 
-    // 统计
+    // 统计：total 使用已计算的 total.value（已正确处理 fallback 情况），其他指标按当前页统计
     const completed = tasks.filter((x:any) => x.status === 'completed').length
     const failed = tasks.filter((x:any) => x.status === 'failed').length
     const uniqueStocks = new Set(tasks.map((x:any) => x.stock_code || x.stock_symbol)).size
-    stats.value = { total: tasks.length, completed, failed, uniqueStocks }
+    stats.value = { total: total.value, completed, failed, uniqueStocks }
   } catch (e:any) {
     ElMessage.error(e?.message || '加载失败')
   } finally {

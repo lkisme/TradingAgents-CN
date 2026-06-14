@@ -7,7 +7,7 @@ import asyncio
 import uuid
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 import sys
 
@@ -2104,11 +2104,16 @@ class SimpleAnalysisService:
         user_id: str,
         status: Optional[str] = None,
         limit: int = 20,
-        offset: int = 0
-    ) -> List[Dict[str, Any]]:
+        offset: int = 0,
+        symbol: Optional[str] = None,
+        market_type: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
         """获取用户任务列表
         - 对于 processing 状态：优先从内存读取（实时进度）
         - 对于 completed/failed/all 状态：合并内存和 MongoDB 数据
+        - 返回 (tasks, total) 元组，total 为过滤后的总数量（用于分页）
         """
         try:
             task_status = None
@@ -2139,12 +2144,67 @@ class SimpleAnalysisService:
             )
             logger.info(f"📋 [Tasks] 内存返回数量: {len(tasks_in_mem)}")
 
+            # 🔧 对内存任务应用额外的过滤条件（symbol、market_type、日期范围）
+            if tasks_in_mem and (symbol or market_type or start_date or end_date):
+                original_count = len(tasks_in_mem)
+                filtered_tasks = []
+
+                # 时间范围过滤辅助函数
+                def in_date_range(task_time: Optional[str]) -> bool:
+                    if not task_time and (start_date or end_date):
+                        return False  # 没有时间且需要过滤，则排除
+                    if not task_time:
+                        return True
+                    try:
+                        from datetime import datetime as dt_parse
+                        dt = dt_parse.fromisoformat(task_time.replace('Z', '+00:00')) if 'Z' in task_time else dt_parse.fromisoformat(task_time)
+                    except Exception:
+                        return True  # 解析失败则保留
+                    ok = True
+                    if start_date:
+                        try:
+                            start_dt = dt_parse.fromisoformat(start_date)
+                            ok = ok and (dt.date() >= start_dt.date())
+                        except Exception:
+                            pass
+                    if end_date:
+                        try:
+                            end_dt = dt_parse.fromisoformat(end_date)
+                            ok = ok and (dt.date() <= end_dt.date())
+                        except Exception:
+                            pass
+                    return ok
+
+                for task in tasks_in_mem:
+                    # 股票代码过滤
+                    if symbol:
+                        task_symbol = task.get("symbol") or task.get("stock_code") or task.get("stock_symbol")
+                        if task_symbol != symbol:
+                            continue
+
+                    # 市场类型过滤
+                    if market_type:
+                        params = task.get("parameters") or {}
+                        if params.get("market_type") != market_type:
+                            continue
+
+                    # 时间范围过滤
+                    task_time = task.get("start_time") or task.get("created_at")
+                    if not in_date_range(task_time):
+                        continue
+
+                    filtered_tasks.append(task)
+
+                tasks_in_mem = filtered_tasks
+                logger.info(f"📋 [Tasks] 内存任务过滤后数量: {len(tasks_in_mem)} (原始: {original_count})")
+
             # 2) 🔧 对于 processing/running 状态，需要合并 MongoDB 数据以获取最新进度
             # 因为 graph_progress_callback 可能直接更新了 MongoDB，而内存数据可能是旧的
 
             # 3) 从 MongoDB 读取历史任务（用于合并或兜底）
             logger.info(f"📋 [Tasks] 从 MongoDB 读取历史任务")
             mongo_tasks: List[Dict[str, Any]] = []
+            mongo_total = 0  # 🔧 初始化，防止异常时未定义
             count = 0
             try:
                 db = get_mongo_db()
@@ -2174,20 +2234,83 @@ class SimpleAnalysisService:
 
                 # 兼容 user_id 与 user 两种字段名
                 base_condition = {"$in": uid_candidates}
-                or_conditions: List[Dict[str, Any]] = [
+                user_or_conditions: List[Dict[str, Any]] = [
                     {"user_id": base_condition},
                     {"user": base_condition}
                 ]
-                query = {"$or": or_conditions}
+                query = {"$or": user_or_conditions}  # 用户归属（必须条件）
 
                 if task_status:
                     # 使用映射后的状态值（TaskStatus枚举的value）
                     query["status"] = task_status.value
                     logger.info(f"📋 [Tasks] 添加状态过滤: {task_status.value}")
 
+                # 🔧 新增过滤条件：股票代码、市场类型、日期范围
+                # 注意：这些条件应该用 $and 组合，而非追加到用户归属的 $or 中
+                and_conditions: List[Dict[str, Any]] = []
+
+                if symbol:
+                    # 股票代码过滤：多个字段名用 $or 组合
+                    symbol_or = {
+                        "$or": [
+                            {"symbol": symbol},
+                            {"stock_code": symbol},
+                            {"stock_symbol": symbol}
+                        ]
+                    }
+                    and_conditions.append(symbol_or)
+                    logger.info(f"📋 [Tasks] 添加股票代码过滤: {symbol}")
+
+                if market_type:
+                    # 市场类型存储在 parameters.market_type 中
+                    and_conditions.append({"parameters.market_type": market_type})
+                    logger.info(f"📋 [Tasks] 添加市场类型过滤: {market_type}")
+
+                if start_date or end_date:
+                    # 时间范围过滤（created_at 或 started_at 任一匹配）
+                    date_conditions = []
+                    from datetime import datetime as dt_parse
+                    if start_date:
+                        try:
+                            start_dt = dt_parse.fromisoformat(start_date)
+                            # created_at 或 started_at 任一 >= start_date
+                            date_inner_or = [
+                                {"created_at": {"$gte": start_dt}},
+                                {"started_at": {"$gte": start_dt}}
+                            ]
+                            date_conditions.append({"$or": date_inner_or})
+                        except Exception as e:
+                            logger.warning(f"⚠️ [Tasks] start_date 解析失败: {start_date}, {e}")
+                    if end_date:
+                        try:
+                            end_dt = dt_parse.fromisoformat(end_date)
+                            # 结束日期需要包含当天
+                            end_dt = end_dt.replace(hour=23, minute=59, second=59)
+                            date_inner_or = [
+                                {"created_at": {"$lte": end_dt}},
+                                {"started_at": {"$lte": end_dt}}
+                            ]
+                            date_conditions.append({"$or": date_inner_or})
+                        except Exception as e:
+                            logger.warning(f"⚠️ [Tasks] end_date 解析失败: {end_date}, {e}")
+                    if date_conditions:
+                        # start 和 end 都需要满足（$and），但每个条件内部是 $or
+                        and_conditions.append({"$and": date_conditions})
+
+                # 将所有过滤条件用 $and 组合到 query
+                if and_conditions:
+                    query["$and"] = and_conditions
+
                 logger.info(f"📋 [Tasks] MongoDB 查询条件: {query}")
-                # 读取更多数据用于合并
-                cursor = db.analysis_tasks.find(query).sort("created_at", -1).limit(limit * 2)
+
+                # 🔧 先获取真实总数（使用 count_documents，不受 limit 影响）
+                mongo_total = await db.analysis_tasks.count_documents(query)
+                logger.info(f"📋 [Tasks] MongoDB 总数: {mongo_total}")
+
+                # 再读取数据用于合并（读取 offset + limit 范围附近的数据）
+                # 读取更多数据以确保合并后能覆盖 offset + limit 范围
+                fetch_limit = offset + limit + limit  # 确保有足够数据用于合并去重
+                cursor = db.analysis_tasks.find(query).sort("created_at", -1).limit(fetch_limit)
                 async for doc in cursor:
                     count += 1
                     # 兼容 user_id 或 user 字段
@@ -2269,7 +2392,33 @@ class SimpleAnalysisService:
             merged_tasks = list(task_dict.values())
             merged_tasks.sort(key=lambda x: x.get('start_time', ''), reverse=True)
 
-            # 分页
+            # 🔧 计算真实总数：
+            # - MongoDB 总数作为基准（准确）
+            # - 检查内存任务是否真的不在 MongoDB 中（需要查询验证，而非仅依赖已 fetch 的数据）
+            mem_task_ids = [t.get("task_id") for t in tasks_in_mem if t.get("task_id")]
+            new_task_count = 0
+            if mem_task_ids:
+                try:
+                    # 查询 MongoDB 检查这些 task_id 是否存在
+                    existing_ids_cursor = db.analysis_tasks.find(
+                        {"task_id": {"$in": mem_task_ids}},
+                        {"task_id": 1}
+                    )
+                    existing_ids = set()
+                    async for doc in existing_ids_cursor:
+                        existing_ids.add(doc.get("task_id"))
+                    # 计算真正不在 MongoDB 中的任务数
+                    new_task_count = len([tid for tid in mem_task_ids if tid not in existing_ids])
+                    logger.info(f"📋 [Tasks] 内存任务ID检查: {len(mem_task_ids)} 个, 已存在于MongoDB: {len(existing_ids)} 个, 新任务: {new_task_count}")
+                except Exception as check_e:
+                    logger.warning(f"⚠️ [Tasks] 检查内存任务ID失败: {check_e}, 使用估算值")
+                    # 失败时使用保守估计：假设所有内存任务都是新任务（可能 slight overcount）
+                    new_task_count = len(mem_task_ids)
+
+            total = mongo_total + new_task_count
+            logger.info(f"📋 [Tasks] 真实总数: {total} (MongoDB: {mongo_total}, 内存新任务: {new_task_count})")
+
+            # 分页（注意：merged_tasks 可能因为 fetch_limit 而被截断，但 total 是真实总数）
             results = merged_tasks[offset:offset + limit]
 
             # 🔥 统一处理时区信息（确保所有时间字段都有时区标识）
@@ -2294,11 +2443,11 @@ class SimpleAnalysisService:
 
             # 为结果补齐股票名称
             results = self._enrich_stock_names(results)
-            logger.info(f"📋 [Tasks] 合并后返回数量: {len(results)} (内存: {len(tasks_in_mem)}, MongoDB: {count})")
-            return results
+            logger.info(f"📋 [Tasks] 合并后返回数量: {len(results)}, 总数: {total} (内存: {len(tasks_in_mem)}, MongoDB: {count})")
+            return results, total
         except Exception as outer_e:
             logger.error(f"❌ list_user_tasks 外层异常: {outer_e}", exc_info=True)
-            return []
+            return [], 0
 
     async def cleanup_zombie_tasks(self, max_running_hours: int = 2) -> Dict[str, Any]:
         """清理僵尸任务（长时间处于 processing/running 状态的任务）
