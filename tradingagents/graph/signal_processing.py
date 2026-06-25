@@ -36,6 +36,7 @@ class SignalProcessor:
                 'target_price': None,
                 'confidence': 0.5,
                 'risk_score': 0.5,
+                'risk_score_source': 'fallback',
                 'reasoning': '输入信号无效，默认持有建议'
             }
 
@@ -48,6 +49,7 @@ class SignalProcessor:
                 'target_price': None,
                 'confidence': 0.5,
                 'risk_score': 0.5,
+                'risk_score_source': 'fallback',
                 'reasoning': '信号内容为空，默认持有建议'
             }
 
@@ -74,14 +76,14 @@ class SignalProcessor:
     "action": "买入/持有/卖出",
     "target_price": 必须是单一数字({currency}价格)。规则：①区间（如18.50-20.00或18.50至20.00）取中点（19.25）；②多目标价（如"第一目标18.85，第二目标19.50"）取第一目标价（18.85）；③约数（约18.5、≈18.5）去掉前缀取数字（18.5）；④实在无法确定时取报告中最接近目标价语义的数字，不能为null。,
     "confidence": 数字(0-1之间，如果没有明确提及则为0.7),
-    "risk_score": 数字(0-1之间，如果没有明确提及则为0.5),
+    "risk_score": 数字(0-1之间，必须从风险评分/风险等级/风险依据中提取或估算，不允许因缺失直接固定为0.5),
     "reasoning": "决策的主要理由摘要"
 }}
 
 请确保：
 1. action字段必须是"买入"、"持有"或"卖出"之一（绝对不允许使用英文buy/hold/sell）
 2. target_price必须是具体的数字,target_price应该是合理的{currency}价格数字（使用{currency_symbol}符号）
-3. confidence和risk_score应该在0-1之间
+3. confidence和risk_score应该在0-1之间；risk_score含义：0.0-0.3低风险，0.3-0.6中等风险，0.6-0.8高风险，0.8-1.0极高风险
 4. reasoning应该是简洁的中文摘要
 5. 所有内容必须使用中文，不允许任何英文投资建议
 
@@ -89,7 +91,7 @@ class SignalProcessor:
 - 股票代码 {stock_symbol or '未知'} 是{market_info['market_name']}，使用{currency}计价
 - 目标价格必须与股票的交易货币一致（{currency_symbol}）
 
-如果某些信息在报告中没有明确提及，请使用合理的默认值。""",
+如果某些信息在报告中没有明确提及，请使用合理的默认值；但risk_score必须依据文本中的风险因素估算，并在reasoning中说明风险依据。""",
             ),
             ("human", full_signal),
         ]
@@ -225,11 +227,14 @@ class SignalProcessor:
                         target_price = None
                         logger.warning(f"🔍 [SignalProcessor] 价格转换失败，设置为None")
 
+                risk_score, risk_score_source = self._resolve_risk_score(decision_data, f"{decision_data.get('reasoning', '')} {full_signal}")
+
                 result = {
                     'action': action,
                     'target_price': target_price,
                     'confidence': float(decision_data.get('confidence', 0.7)),
-                    'risk_score': float(decision_data.get('risk_score', 0.5)),
+                    'risk_score': risk_score,
+                    'risk_score_source': risk_score_source,
                     'reasoning': decision_data.get('reasoning', '基于综合分析的投资建议'),
                     'stop_loss': decision_data.get('stop_loss'),
                     'risk_reward_ratio': decision_data.get('risk_reward_ratio'),
@@ -293,6 +298,76 @@ class SignalProcessor:
             return float(num_match.group(1))
 
         return None
+
+    def _normalize_risk_score(self, value) -> float:
+        """Normalize risk score to 0-1. Accepts 0.65, 65, or '65%'."""
+        if value is None:
+            return None
+        import re
+
+        text = str(value).strip()
+        match = re.search(r'(\d+(?:\.\d+)?)', text)
+        if not match:
+            return None
+
+        score = float(match.group(1))
+        if '%' in text or '％' in text or score > 1:
+            score = score / 100
+
+        if 0 <= score <= 1:
+            return round(score, 4)
+        return None
+
+    def _extract_risk_score_from_text(self, text: str) -> float:
+        """Extract explicit risk score from Chinese/English decision text."""
+        if not text:
+            return None
+        import re
+
+        patterns = [
+            r'(?:risk_score|risk score|风险评分|风险分数|风险得分|综合风险评分|下行风险评分)\s*[：:=]\s*[*_`]*\s*(\d+(?:\.\d+)?\s*[%％]?)',
+            r'(?:风险等级|风险级别)\s*[：:=]\s*[*_`]*\s*(低|较低|中低|中等|中|中高|较高|高|极高|很高)',
+            r'(低|较低|中低|中等|中|中高|较高|高|极高|很高)\s*风险',
+        ]
+
+        for pattern in patterns[:1]:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                score = self._normalize_risk_score(match.group(1))
+                if score is not None:
+                    return score
+
+        risk_level_scores = {
+            '低': 0.25,
+            '较低': 0.3,
+            '中低': 0.4,
+            '中等': 0.5,
+            '中': 0.5,
+            '中高': 0.65,
+            '较高': 0.7,
+            '高': 0.75,
+            '极高': 0.9,
+            '很高': 0.9,
+        }
+        for pattern in patterns[1:]:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return risk_level_scores.get(match.group(1))
+
+        return None
+
+    def _resolve_risk_score(self, decision_data: dict, source_text: str) -> tuple[float, str]:
+        """Resolve risk score with provenance, avoiding silent 0.5 defaults."""
+        score = self._normalize_risk_score(decision_data.get('risk_score'))
+        if score is not None:
+            return score, 'llm_json'
+
+        score = self._extract_risk_score_from_text(source_text)
+        if score is not None:
+            return score, 'source_text'
+
+        logger.warning("🔍 [SignalProcessor] 未找到明确风险评分，使用兜底0.5")
+        return 0.5, 'fallback'
 
     def _smart_price_estimation(self, text: str, action: str, is_china: bool) -> float:
         """智能价格推算方法"""
@@ -418,11 +493,15 @@ class SignalProcessor:
             is_china = True  # 默认假设是A股，实际应该从上下文获取
             target_price = self._smart_price_estimation(text, action, is_china)
 
+        risk_score = self._extract_risk_score_from_text(text)
+        risk_score_source = 'source_text' if risk_score is not None else 'fallback'
+
         return {
             'action': action,
             'target_price': target_price,
             'confidence': 0.7,
-            'risk_score': 0.5,
+            'risk_score': risk_score if risk_score is not None else 0.5,
+            'risk_score_source': risk_score_source,
             'reasoning': '基于综合分析的投资建议',
             'stop_loss': None,
             'risk_reward_ratio': None,
@@ -438,6 +517,7 @@ class SignalProcessor:
             'target_price': None,
             'confidence': 0.5,
             'risk_score': 0.5,
+            'risk_score_source': 'fallback',
             'reasoning': '输入数据无效，默认持有建议',
             'stop_loss': None,
             'risk_reward_ratio': None,

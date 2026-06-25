@@ -19,10 +19,9 @@ class TradeDecision(BaseModel):
         description="0-1之间的置信度"
     )
     risk_score: float = Field(
-        default=0.5,
         ge=0.0,
         le=1.0,
-        description="0-1之间的风险评分"
+        description="0-1之间的风险评分，必须根据下行空间、波动性、数据质量、估值风险、事件/政策风险、流动性风险综合给出，不应在缺少显式数值时机械使用0.5"
     )
     reasoning: str = Field(
         description="决策理由的中文摘要"

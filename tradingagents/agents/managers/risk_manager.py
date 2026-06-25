@@ -45,6 +45,8 @@ def create_risk_manager(llm, memory):
 - 明确且可操作的建议：买入、卖出或持有。
 - 基于辩论和过去反思的详细推理。
 - 具体目标价格：给出明确的数值或区间（如 XX 元或 XX-XX 元）。如数据不足，可标注低置信度。
+- 风险评分 risk_score：必须给出0-1之间的数值，不允许省略。0.0-0.3=低风险，0.3-0.6=中等风险，0.6-0.8=高风险，0.8-1.0=极高风险。
+- 风险等级与依据：说明risk_score的依据，必须覆盖下行空间、波动性、数据质量、估值风险、事件/政策风险、流动性风险中相关项。
 - 止损价格：建议的止损价位
 - 盈亏比：预期收益与预期损失的比值
 - 建议仓位：占总资金的比例（0-1）
@@ -56,6 +58,11 @@ def create_risk_manager(llm, memory):
 2. 必须校验目标价逻辑和给出的理由是否自洽：不能出现逻辑看大涨但目标价仅微涨、或者逻辑看空但目标价接近现价的自相矛盾情况
 3. 必须校验盈亏比合理性：收益必须大于潜在风险，禁止输出盈亏比<1的建议
 如果发现上游决策有明显自相矛盾的地方，必须明确指出并修正。
+
+最终回复必须包含以下固定字段，便于系统解析：
+**风险评分：** 0.xx
+**风险等级：** 低/中等/高/极高
+**风险依据：** ...
 
 综合分析摘要：
 {combined_report_summary}
@@ -226,6 +233,8 @@ def create_risk_manager_structured(llm, memory):
 - 明确且可操作的建议：买入、卖出或持有。
 - 基于辩论和过去反思的详细推理。
 - 具体目标价格：给出明确的数值或区间（如 XX 元或 XX-XX 元）。如数据不足，可标注低置信度。
+- 风险评分 risk_score：必须给出0-1之间的数值，不允许省略。0.0-0.3=低风险，0.3-0.6=中等风险，0.6-0.8=高风险，0.8-1.0=极高风险。
+- 风险等级与依据：说明risk_score的依据，必须覆盖下行空间、波动性、数据质量、估值风险、事件/政策风险、流动性风险中相关项。
 - 止损价格：建议的止损价位
 - 盈亏比：预期收益与预期损失的比值
 - 建议仓位：占总资金的比例（0-1）
@@ -237,6 +246,11 @@ def create_risk_manager_structured(llm, memory):
 2. 必须校验目标价逻辑和给出的理由是否自洽：不能出现逻辑看大涨但目标价仅微涨、或者逻辑看空但目标价接近现价的自相矛盾情况
 3. 必须校验盈亏比合理性：收益必须大于潜在风险，禁止输出盈亏比<1的建议
 如果发现上游决策有明显自相矛盾的地方，必须明确指出并修正。
+
+最终回复必须包含以下固定字段，便于系统解析：
+**风险评分：** 0.xx
+**风险等级：** 低/中等/高/极高
+**风险依据：** ...
 
 综合分析摘要：
 {combined_report_summary}
@@ -268,6 +282,7 @@ def create_risk_manager_structured(llm, memory):
 
             # Convert to dict for state
             decision_dict = decision.model_dump()
+            decision_dict["risk_score_source"] = "structured_llm"
 
             # Also create text version for final_trade_decision (backward compat)
             response_content = f"""**建议：{decision.action}**
@@ -369,6 +384,7 @@ def create_risk_manager_structured(llm, memory):
                 "position_size": None,
                 "horizon": None,
                 "invalidation": None,
+                "risk_score_source": "fallback",
             }
             logger.info(f"📋 [Risk Manager Structured -> Fallback] 最终决策生成完成，内容长度: {len(response_content)} 字符")
 
