@@ -37,6 +37,7 @@ class SignalProcessor:
                 'confidence': 0.5,
                 'risk_score': 0.5,
                 'risk_score_source': 'fallback',
+                'risk_score_basis': None,
                 'reasoning': '输入信号无效，默认持有建议'
             }
 
@@ -50,6 +51,7 @@ class SignalProcessor:
                 'confidence': 0.5,
                 'risk_score': 0.5,
                 'risk_score_source': 'fallback',
+                'risk_score_basis': None,
                 'reasoning': '信号内容为空，默认持有建议'
             }
 
@@ -227,7 +229,10 @@ class SignalProcessor:
                         target_price = None
                         logger.warning(f"🔍 [SignalProcessor] 价格转换失败，设置为None")
 
-                risk_score, risk_score_source = self._resolve_risk_score(decision_data, f"{decision_data.get('reasoning', '')} {full_signal}")
+                risk_score, risk_score_source, risk_score_basis = self._resolve_risk_score(
+                    decision_data,
+                    f"{decision_data.get('reasoning', '')} {full_signal}"
+                )
 
                 result = {
                     'action': action,
@@ -235,6 +240,7 @@ class SignalProcessor:
                     'confidence': float(decision_data.get('confidence', 0.7)),
                     'risk_score': risk_score,
                     'risk_score_source': risk_score_source,
+                    'risk_score_basis': risk_score_basis,
                     'reasoning': decision_data.get('reasoning', '基于综合分析的投资建议'),
                     'stop_loss': decision_data.get('stop_loss'),
                     'risk_reward_ratio': decision_data.get('risk_reward_ratio'),
@@ -320,8 +326,38 @@ class SignalProcessor:
 
     def _extract_risk_score_from_text(self, text: str) -> float:
         """Extract explicit risk score from Chinese/English decision text."""
+        score, _, _ = self._extract_risk_score_details_from_text(text)
+        return score
+
+    def _extract_risk_score_basis_from_text(self, text: str) -> str:
+        """Extract concise risk score basis when present."""
         if not text:
             return None
+        import re
+
+        patterns = [
+            r'(?:风险依据|风险评分依据|risk basis)\s*[：:=]\s*[*_`]*\s*([^\n\r]+)',
+            r'(?:风险因素|主要风险)\s*[：:=]\s*[*_`]*\s*([^\n\r]+)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    def _risk_score_text_source(self, text: str) -> str:
+        """Infer provenance from labeled analysis text."""
+        lowered = text.lower()
+        if 'risk_management_decision' in lowered or '风险管理' in text or '风险经理' in text:
+            return 'risk_management_decision'
+        if 'risk_debate_state' in lowered or '综合风险评分' in text or '下行风险评分' in text:
+            return 'risk_debate_state'
+        return 'source_text'
+
+    def _extract_risk_score_details_from_text(self, text: str) -> tuple[float, str, str]:
+        """Extract risk score, source, and basis from decision text."""
+        if not text:
+            return None, None, None
         import re
 
         patterns = [
@@ -329,13 +365,15 @@ class SignalProcessor:
             r'(?:风险等级|风险级别)\s*[：:=]\s*[*_`]*\s*(低|较低|中低|中等|中|中高|较高|高|极高|很高)',
             r'(低|较低|中低|中等|中|中高|较高|高|极高|很高)\s*风险',
         ]
+        source = self._risk_score_text_source(text)
+        basis = self._extract_risk_score_basis_from_text(text)
 
         for pattern in patterns[:1]:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 score = self._normalize_risk_score(match.group(1))
                 if score is not None:
-                    return score
+                    return score, source, basis
 
         risk_level_scores = {
             '低': 0.25,
@@ -352,22 +390,39 @@ class SignalProcessor:
         for pattern in patterns[1:]:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                return risk_level_scores.get(match.group(1))
+                score = risk_level_scores.get(match.group(1))
+                if score is not None:
+                    return score, source, basis
 
-        return None
+        return None, None, basis
 
-    def _resolve_risk_score(self, decision_data: dict, source_text: str) -> tuple[float, str]:
+    def _is_default_risk_decision(self, decision_data: dict) -> bool:
+        """Detect parser defaults that should be repaired from source analysis text."""
+        score = self._normalize_risk_score(decision_data.get('risk_score'))
+        reasoning = str(decision_data.get('reasoning', '')).strip()
+        return score == 0.5 and reasoning in {
+            '',
+            '基于综合分析的投资建议',
+            '基于综合分析的投资建议。',
+        }
+
+    def _resolve_risk_score(self, decision_data: dict, source_text: str) -> tuple[float, str, str]:
         """Resolve risk score with provenance, avoiding silent 0.5 defaults."""
+        if self._is_default_risk_decision(decision_data):
+            score, source, basis = self._extract_risk_score_details_from_text(source_text)
+            if score is not None:
+                return score, source, basis
+
         score = self._normalize_risk_score(decision_data.get('risk_score'))
         if score is not None:
-            return score, 'llm_json'
+            return score, 'llm_json', self._extract_risk_score_basis_from_text(source_text)
 
-        score = self._extract_risk_score_from_text(source_text)
+        score, source, basis = self._extract_risk_score_details_from_text(source_text)
         if score is not None:
-            return score, 'source_text'
+            return score, source, basis
 
         logger.warning("🔍 [SignalProcessor] 未找到明确风险评分，使用兜底0.5")
-        return 0.5, 'fallback'
+        return 0.5, 'fallback', None
 
     def _smart_price_estimation(self, text: str, action: str, is_china: bool) -> float:
         """智能价格推算方法"""
@@ -493,8 +548,10 @@ class SignalProcessor:
             is_china = True  # 默认假设是A股，实际应该从上下文获取
             target_price = self._smart_price_estimation(text, action, is_china)
 
-        risk_score = self._extract_risk_score_from_text(text)
-        risk_score_source = 'source_text' if risk_score is not None else 'fallback'
+        risk_score_details = self._extract_risk_score_details_from_text(text)
+        risk_score = risk_score_details[0]
+        risk_score_source = risk_score_details[1] if risk_score is not None else 'fallback'
+        risk_score_basis = risk_score_details[2]
 
         return {
             'action': action,
@@ -502,6 +559,7 @@ class SignalProcessor:
             'confidence': 0.7,
             'risk_score': risk_score if risk_score is not None else 0.5,
             'risk_score_source': risk_score_source,
+            'risk_score_basis': risk_score_basis,
             'reasoning': '基于综合分析的投资建议',
             'stop_loss': None,
             'risk_reward_ratio': None,
@@ -518,6 +576,7 @@ class SignalProcessor:
             'confidence': 0.5,
             'risk_score': 0.5,
             'risk_score_source': 'fallback',
+            'risk_score_basis': None,
             'reasoning': '输入数据无效，默认持有建议',
             'stop_loss': None,
             'risk_reward_ratio': None,
