@@ -303,9 +303,14 @@ class FinancialSituationMemory:
                 self._embedding_disabled = True
                 logger.warning(f"⚠️ OpenRouter未找到DASHSCOPE_API_KEY，记忆功能已禁用")
                 logger.info(f"💡 系统将继续运行，但不会保存或检索历史记忆")
-        elif config["backend_url"] == "http://localhost:11434/v1":
+        elif self.llm_provider == "ollama":
             self.embedding = "nomic-embed-text"
-            self.client = OpenAI(base_url=config["backend_url"])
+            ollama_base_url = (
+                self.embedding_provider_doc.get("default_base_url")
+                if self.embedding_provider_doc
+                else config["backend_url"]
+            )
+            self.client = OpenAI(base_url=ollama_base_url, api_key="ollama")
         else:
             self.embedding = "text-embedding-3-small"
             openai_key = os.getenv('OPENAI_API_KEY')
@@ -381,6 +386,7 @@ class FinancialSituationMemory:
             "text-embedding-v3": 1024,
             "text-embedding-3-small": 1536,
             "text-embedding-3-large": 3072,
+            "nomic-embed-text": 768,
             "bge-large-zh": 1024,
             "bge-base-zh": 768,
         }
