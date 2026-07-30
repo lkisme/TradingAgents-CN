@@ -1,8 +1,18 @@
 import asyncio
+import sys
+import types
 from typing import Any, Dict, List
 
 
+def _install_database_stub(monkeypatch):
+    database_mod = types.ModuleType("app.core.database")
+    database_mod.get_mongo_db = lambda: None
+    monkeypatch.setitem(sys.modules, "app.core.database", database_mod)
+
+
 def test_enhanced_screening_enriches_from_db(monkeypatch):
+    _install_database_stub(monkeypatch)
+
     # Late import to patch module symbols correctly
     from app.services.enhanced_screening_service import EnhancedScreeningService
 
@@ -76,18 +86,29 @@ def test_enhanced_screening_enriches_from_db(monkeypatch):
 
 
 def test_quotes_ingestion_run_once_writes_bulk(monkeypatch):
+    _install_database_stub(monkeypatch)
+
     from app.services.quotes_ingestion_service import QuotesIngestionService
     import app.services.quotes_ingestion_service as qis_mod
 
-    # Fake DataSourceManager to avoid external calls
+    # Fake DataSourceManager to avoid external calls when resolving trade date
     class _FakeManager:
-        def get_realtime_quotes_with_fallback(self):
-            return {
-                "000001": {"close": 10.1, "pct_chg": 0.1, "amount": 1.0e8},
-                "600000": {"close": 9.8, "pct_chg": -0.3, "amount": 7.5e7},
-            }, "fake"
+        def find_latest_trade_date_with_fallback(self):
+            return "20260728"
 
     monkeypatch.setattr(qis_mod, "DataSourceManager", _FakeManager, raising=True)
+
+    async def _fake_fetch(self, source_type, akshare_api=None):
+        return (
+            {
+                "000001": {"close": 10.1, "pct_chg": 0.1, "amount": 1.0e8},
+                "600000": {"close": 9.8, "pct_chg": -0.3, "amount": 7.5e7},
+            },
+            "fake",
+        )
+
+    monkeypatch.setattr(QuotesIngestionService, "_fetch_quotes_from_source_async", _fake_fetch, raising=True)
+    monkeypatch.setattr(qis_mod.settings, "QUOTES_AUTO_DETECT_TUSHARE_PERMISSION", False, raising=False)
 
     # Capture bulk_write ops
     class _FakeResult:
@@ -133,3 +154,91 @@ def test_quotes_ingestion_run_once_writes_bulk(monkeypatch):
     import asyncio
     asyncio.run(_run())
 
+
+def test_quotes_ingestion_times_out_blocking_quote_fetch(monkeypatch):
+    _install_database_stub(monkeypatch)
+
+    from app.services.quotes_ingestion_service import QuotesIngestionService
+    import app.services.quotes_ingestion_service as qis_mod
+
+    async def _noop_record_status(self, **kwargs):
+        self.recorded_status = kwargs
+
+    async def _slow_fetch(self, source_type, akshare_api=None):
+        await asyncio.sleep(0.2)
+        return {"000001": {"close": 10.1}}, "slow"
+
+    class _FakeManager:
+        def find_latest_trade_date_with_fallback(self):
+            return "20260728"
+
+    monkeypatch.setattr(QuotesIngestionService, "_is_trading_time", lambda self, now=None: True, raising=True)
+    monkeypatch.setattr(QuotesIngestionService, "_fetch_quotes_from_source_async", _slow_fetch, raising=True)
+    monkeypatch.setattr(QuotesIngestionService, "_record_sync_status", _noop_record_status, raising=True)
+    monkeypatch.setattr(qis_mod, "DataSourceManager", _FakeManager, raising=True)
+    monkeypatch.setattr(qis_mod.settings, "QUOTES_AUTO_DETECT_TUSHARE_PERMISSION", False, raising=False)
+    monkeypatch.setattr(qis_mod.settings, "QUOTES_INGEST_FETCH_TIMEOUT_SECONDS", 0.01, raising=False)
+
+    async def _run():
+        svc = QuotesIngestionService()
+        started = asyncio.get_running_loop().time()
+        await svc.run_once()
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed < 0.1
+        assert svc.recorded_status["success"] is False
+        assert "超时" in svc.recorded_status["error_msg"]
+
+    import asyncio
+    asyncio.run(_run())
+
+
+def test_quotes_ingestion_times_out_tushare_permission_check(monkeypatch):
+    _install_database_stub(monkeypatch)
+
+    from app.services.quotes_ingestion_service import QuotesIngestionService
+    import app.services.quotes_ingestion_service as qis_mod
+
+    async def _fake_fetch(self, source_type, akshare_api=None):
+        return {"000001": {"close": 10.1}}, "fake"
+
+    async def _noop_bulk_upsert(self, quotes_map, trade_date, source):
+        self.upserted = {
+            "quotes_map": quotes_map,
+            "trade_date": trade_date,
+            "source": source,
+        }
+
+    async def _noop_record_status(self, **kwargs):
+        self.recorded_status = kwargs
+
+    async def _slow_permission_check(self):
+        await asyncio.sleep(0.2)
+        return True
+
+    class _FakeManager:
+        def find_latest_trade_date_with_fallback(self):
+            return "20260728"
+
+    monkeypatch.setattr(QuotesIngestionService, "_is_trading_time", lambda self, now=None: True, raising=True)
+    monkeypatch.setattr(QuotesIngestionService, "_check_tushare_permission_async", _slow_permission_check, raising=True)
+    monkeypatch.setattr(QuotesIngestionService, "_fetch_quotes_from_source_async", _fake_fetch, raising=True)
+    monkeypatch.setattr(QuotesIngestionService, "_bulk_upsert", _noop_bulk_upsert, raising=True)
+    monkeypatch.setattr(QuotesIngestionService, "_record_sync_status", _noop_record_status, raising=True)
+    monkeypatch.setattr(qis_mod, "DataSourceManager", _FakeManager, raising=True)
+    monkeypatch.setattr(qis_mod.settings, "QUOTES_AUTO_DETECT_TUSHARE_PERMISSION", True, raising=False)
+    monkeypatch.setattr(qis_mod.settings, "QUOTES_INGEST_FETCH_TIMEOUT_SECONDS", 0.01, raising=False)
+
+    async def _run():
+        svc = QuotesIngestionService()
+        started = asyncio.get_running_loop().time()
+        await svc.run_once()
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed < 0.1
+        assert svc._tushare_permission_checked is True
+        assert svc._tushare_has_premium is False
+        assert svc.upserted["quotes_map"] == {"000001": {"close": 10.1}}
+
+    import asyncio
+    asyncio.run(_run())

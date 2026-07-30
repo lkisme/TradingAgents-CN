@@ -213,6 +213,10 @@ class Settings(BaseSettings):
         default=360,
         description="实时行情采集间隔（秒）。默认360秒（6分钟），免费用户建议>=300秒，付费用户可设置5-60秒"
     )
+    QUOTES_INGEST_FETCH_TIMEOUT_SECONDS: float = Field(
+        default=60.0,
+        description="实时行情单次数据源获取超时时间（秒），防止第三方接口阻塞事件循环"
+    )
     # 休市期/启动兜底补数（填充上一笔快照）
     QUOTES_BACKFILL_ON_STARTUP: bool = Field(default=True)
     QUOTES_BACKFILL_ON_OFFHOURS: bool = Field(default=True)

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, time as dtime, timedelta
 from typing import Dict, Optional, Tuple, List
@@ -594,6 +595,22 @@ class QuotesIngestionService:
             logger.error(f"从 {source_type} 获取行情失败: {e}")
             return None, None
 
+    @staticmethod
+    def _format_source_label(source_type: str, akshare_api: Optional[str] = None) -> str:
+        if source_type == "akshare" and akshare_api:
+            return f"akshare_{akshare_api}"
+        return source_type
+
+    async def _fetch_quotes_from_source_async(
+        self,
+        source_type: str,
+        akshare_api: Optional[str] = None
+    ) -> Tuple[Optional[Dict], Optional[str]]:
+        return await asyncio.to_thread(self._fetch_quotes_from_source, source_type, akshare_api)
+
+    async def _check_tushare_permission_async(self) -> bool:
+        return await asyncio.to_thread(self._check_tushare_permission)
+
     async def run_once(self) -> None:
         """
         执行一次采集与入库
@@ -615,7 +632,17 @@ class QuotesIngestionService:
             # 首次运行：检测 Tushare 权限
             if settings.QUOTES_AUTO_DETECT_TUSHARE_PERMISSION and not self._tushare_permission_checked:
                 logger.info("🔍 首次运行，检测 Tushare rt_k 接口权限...")
-                has_premium = self._check_tushare_permission()
+                timeout_seconds = settings.QUOTES_INGEST_FETCH_TIMEOUT_SECONDS
+                try:
+                    has_premium = await asyncio.wait_for(
+                        self._check_tushare_permission_async(),
+                        timeout=timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"⚠️ Tushare rt_k 接口权限检测超时（>{timeout_seconds}秒），按免费用户处理")
+                    self._tushare_has_premium = False
+                    self._tushare_permission_checked = True
+                    has_premium = False
 
                 if has_premium:
                     logger.info(
@@ -629,16 +656,32 @@ class QuotesIngestionService:
 
             # 获取下一个数据源
             source_type, akshare_api = self._get_next_source()
+            source_label = self._format_source_label(source_type, akshare_api)
 
             # 尝试获取行情
-            quotes_map, source_name = self._fetch_quotes_from_source(source_type, akshare_api)
+            timeout_seconds = settings.QUOTES_INGEST_FETCH_TIMEOUT_SECONDS
+            try:
+                quotes_map, source_name = await asyncio.wait_for(
+                    self._fetch_quotes_from_source_async(source_type, akshare_api),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                error_msg = f"{source_label} 获取行情超时（>{timeout_seconds}秒）"
+                logger.error(f"❌ {error_msg}")
+                await self._record_sync_status(
+                    success=False,
+                    source=source_label,
+                    records_count=0,
+                    error_msg=error_msg
+                )
+                return
 
             if not quotes_map:
-                logger.warning(f"⚠️ {source_name or source_type} 未获取到行情数据，跳过本次入库")
+                logger.warning(f"⚠️ {source_name or source_label} 未获取到行情数据，跳过本次入库")
                 # 记录失败状态
                 await self._record_sync_status(
                     success=False,
-                    source=source_name or source_type,
+                    source=source_name or source_label,
                     records_count=0,
                     error_msg="未获取到行情数据"
                 )
@@ -671,4 +714,3 @@ class QuotesIngestionService:
                 records_count=0,
                 error_msg=str(e)
             )
-
